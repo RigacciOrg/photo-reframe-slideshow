@@ -2,9 +2,9 @@
 
 **Slideshow with on-the-fly, user defined image cropping and resizing**
 
-This is a stand-alone program, which requires the Python 3 
-language with the PyQt5 and PIL libraries (not tested with 
-Python 2, but should be feasible).
+This is a stand-alone program, which requires the Python 
+language (tested with version 3.5 and 2.7) with the PyQt5 and 
+PIL libraries.
 
 It requires also the external command line tool **exiv2**, to 
 eventually fix a wrong Exif Orientation tag in images.
@@ -12,12 +12,12 @@ eventually fix a wrong Exif Orientation tag in images.
 Usage:
 
 ```
-usage: photo-reframe [-h] [-f] [-r WxH] [-p] [--timer TIMER] directory
+usage: photo-reframe [-h] [-f] [-r WxH] [-p] [--timer TIMER] playlist
 
-Show images listed in "playlist.txt", which contains "filename|geometry" data.
+Show images listed in playlist, which contains "filename|geometry" entries.
 
 positional arguments:
-  directory            directory containing "playlist.txt" and images
+  playlist             playlist filename, or directory which contains it
 
 optional arguments:
   -h, --help           show this help message and exit
@@ -33,16 +33,21 @@ You can start the slideshow mode in full-screen with the
 following command line:
 
 ```
-photo-reframe --fullscreen --play path/to/directory
+photo-reframe --fullscreen --play path/to/directory/
 ```
 
-The program receives the name of a **directory** from the 
-command line and it will search images and a **playlist.txt** 
-file starting from that.
+The program receives the name of a **directory** (or a 
+**playlist**) from the command line and it will search images 
+starting from that location.
 
-The playlist.txt file contains the filename of the images and 
-their respective geometries, separated by a vertical bar, 
-something like this:
+The default, preferred name for the playlist is 
+"playlist_16x9.m3u" (or whatever is the screen width/height 
+ratio imposed by the command line option). A fallback default is 
+"playlist.m3u".
+
+The playlist contains the filename of the images and their 
+respective geometries, separated by a vertical bar, something 
+like this:
 
 ```
 IMG_6602.JPG|4000x2250+0+332
@@ -83,7 +88,7 @@ selected for that image. A **red** border means that no geometry
 was defined for the current image (thus that image will not be 
 displayed in slideshow). A **yellow** border means that a 
 geometry was defined, but you moved the image into the frame, so 
-you need to press Return to update its value.
+you need to press Return again to update its value.
 
 At the end of your work, press the **S** key to save the 
 playlist with the update geometries.
