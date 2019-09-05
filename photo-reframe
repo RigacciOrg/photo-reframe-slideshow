@@ -9,6 +9,10 @@ Each playlist entry is of the type:
 
     IMG_6605.JPG|2829x1591+804+781
 
+Default playlist filename is "playlist_16x9.m3u" (or different
+screen widht/height ratio, see command line options) or
+"playlist.m3u".
+
 Playlist can be generated interactively reframing each image
 on the screen. Screen aspect ratio defaults to 16:9, but can
 be changed by command line options.
@@ -38,7 +42,7 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
@@ -47,9 +51,10 @@ APP_TITLE = u'Photo Reframe App'
 DEFAULT_FRAME_RATIO = '16x9'
 DEFAULT_SLIDE_TIME = 4.0
 
-PLAYLIST = 'playlist.txt'
-GEOMETRY_RE = '(\d+)x(\d+)\+(\d+)\+(\d+)'
+PLAYLIST = 'playlist'
+PLAYLIST_EXT = 'm3u'
 EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff')
+GEOMETRY_RE = '(\d+)x(\d+)\+(\d+)\+(\d+)'
 
 # Window's app default size (desktop space percentage).
 WIN_X = 0.01
@@ -211,19 +216,15 @@ class photoReframeApp(QMainWindow):
 
         self.setWindowTitle(APP_TITLE)
 
-        parser = argparse.ArgumentParser(description=u'Show images listed in "%s", which contains "filename|geometry" data.' % (PLAYLIST,))
-        parser.add_argument('directory', type=str, help='directory containing "%s" and images' % (PLAYLIST,))
+        parser = argparse.ArgumentParser(description=u'Show images listed in playlist, which contains "filename|geometry" entries.')
+        parser.add_argument('playlist', type=str, help='playlist filename, or directory which contains it')
         parser.add_argument('-f', '--fullscreen', action='store_true', help='start in fullscreen mode')
         parser.add_argument('-r', '--ratio', metavar='WxH', type=str, default=DEFAULT_FRAME_RATIO, help='screen ratio, width x height (default %s)' % (DEFAULT_FRAME_RATIO,))
         parser.add_argument('-p', '--play', action='store_true', help='start slideshow')
         parser.add_argument('--timer', type=float, default=DEFAULT_SLIDE_TIME, help='slideshow timer in seconds (default %.1f)' % (DEFAULT_SLIDE_TIME,))
         args = parser.parse_args()
 
-        self.directory = args.directory
-        self.slide_time = args.timer
-        if not os.path.isdir(self.directory):
-            print(u'Directory "%s" does not exists' % (self.directory,))
-            sys.exit(1)
+        # Determines screen width/height ratio.
         try:
             w, h = args.ratio.split('x')
             self.frame_ratio_width = float(w)
@@ -236,8 +237,31 @@ class photoReframeApp(QMainWindow):
             self.frame_ratio_height = float(h)
             self.frame_ratio = self.frame_ratio_width / self.frame_ratio_height
 
+        # Determines directory path and playlist filename.
+        if os.path.isfile(args.playlist):
+            self.playlist = args.playlist
+            self.directory = os.path.dirname(self.playlist)
+        elif not os.path.isdir(args.playlist):
+            print(u'Path "%s" does not exists' % (args.playlist,))
+            sys.exit(1)
+        else:
+            # The passed argument is a directory.
+            self.directory = args.playlist
+            # Preferred playlist name: "playlist_16x9.m3u" ...
+            p1 = os.path.join(self.directory, '%s_%dx%d.%s' % (PLAYLIST, self.frame_ratio_width, self.frame_ratio_height, PLAYLIST_EXT))
+            # ... fallback: "playlist.m3u"
+            p2 = os.path.join(self.directory, '%s.%s' % (PLAYLIST, PLAYLIST_EXT))
+            if os.path.isfile(p1):
+                self.playlist = p1
+            elif os.path.isfile(p2):
+                self.playlist = p2
+            else:
+                self.playlist = p1
+        print(u'Using playlist "%s" from directory "%s"' % (os.path.basename(self.playlist), self.directory,))
+
+        self.slide_time = args.timer
+
         # Build the lists (names, geometries) of images.
-        self.playlist = os.path.join(self.directory, PLAYLIST)
         self.readPlaylist()
         self.scanDirectory()
         if len(self.image_indexes) < 1:
