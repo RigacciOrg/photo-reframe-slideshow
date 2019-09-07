@@ -675,6 +675,7 @@ Q\tQuit program"""
             self.view_vscroll = int(((float(s.image_height) * self.zoom) - float(s.view_height)) / 2.0)
             print('fitImageWidth() self.view_vscroll = %s' % (self.view_vscroll,))
             self.reframeImage()
+            self.showGeometryFlag(view_moved=True)
 
 
     def fitImageHeight(self, fullHeight=False):
@@ -686,6 +687,7 @@ Q\tQuit program"""
             self.view_vscroll = 0
             print('fitImageHeight() self.view_hscroll = %s' % (self.view_hscroll,))
             self.reframeImage()
+            self.showGeometryFlag(view_moved=True)
 
 
     def imageRotate(self):
