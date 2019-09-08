@@ -437,9 +437,12 @@ class photoReframeApp(QMainWindow):
             if exif_data != None:
                 exif = dict(exif_data.items())
                 if ORIENTATION_TAG in exif.keys():
-                    exif_orientation_tag = exif[ORIENTATION_TAG]
-        except:
-            print(u'Error getting Exif data from image "%s"' % (filename,))
+                    exif_orientation_tag = int(exif[ORIENTATION_TAG])
+        except Exception as e:
+            print(u'Error getting Exif data from image "%s": %s' % (os.path.basename(filename), str(e)))
+        if exif_orientation_tag not in EXIF_ORIENTATION_TAGS:
+            print(u'Invalid Exif Orientation tag: %s, assuming 1' % (exif_orientation_tag,))
+            exif_orientation_tag = 1
         return exif_orientation_tag
 
 
@@ -673,7 +676,6 @@ Q\tQuit program"""
             self.zoom = float(s.view_width) / float(s.image_width)
             self.view_hscroll = 0
             self.view_vscroll = int(((float(s.image_height) * self.zoom) - float(s.view_height)) / 2.0)
-            print('fitImageWidth() self.view_vscroll = %s' % (self.view_vscroll,))
             self.reframeImage()
             self.showGeometryFlag(view_moved=True)
 
@@ -685,7 +687,6 @@ Q\tQuit program"""
             self.zoom = float(s.view_height) / float(s.image_height)
             self.view_hscroll = int(((float(s.image_width) * self.zoom) - float(s.view_width)) / 2.0)
             self.view_vscroll = 0
-            print('fitImageHeight() self.view_hscroll = %s' % (self.view_hscroll,))
             self.reframeImage()
             self.showGeometryFlag(view_moved=True)
 
