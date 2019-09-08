@@ -323,7 +323,7 @@ class photoReframeApp(QMainWindow):
                     if '|' in line:
                         img_name, img_geometry = line.split('|')
                         if not re.match(GEOMETRY_RE, img_geometry):
-                            print(u'Invalid geometry for image "%s"' % (img_name,))
+                            print(u'WARNING: Invalid geometry for image "%s"' % (img_name,))
                             img_geometry = None
                     else:
                         img_name, img_geometry = line, None
@@ -332,6 +332,8 @@ class photoReframeApp(QMainWindow):
                         self.image_indexes.append(new_index)
                         self.image_names[new_index] = img_name
                         self.image_geometries[new_index] = img_geometry
+                    else:
+                        print(u'WARNING: Image in playlist does not exists: "%s"' % (img_name,))
         print(u'Read file "%s": %d images' % (self.playlist, len(self.image_indexes)))
 
 
