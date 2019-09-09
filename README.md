@@ -1,4 +1,4 @@
-# photo-reframe App
+# photo-reframe Slideshow
 
 **Slideshow with on-the-fly, user defined image cropping and resizing**
 
