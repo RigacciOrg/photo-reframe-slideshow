@@ -39,10 +39,10 @@ from PyQt5.QtGui import QPixmap, QColor, QTransform, QPalette, QCursor
 from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox
 
 __author__ = "Niccolo Rigacci"
-__copyright__ = "Copyright 2019 Niccolo Rigacci <niccolo@rigacci.org>"
+__copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
@@ -579,13 +579,15 @@ F11 or F\tToggle fullscreen mode
 W\tZoom to fit image width
 H\tZoom to fit image height
 Z\tZoom-in to remove blank space
-R\tUpdate image cycling Exif Orientation tag
+R\tUpdate image by cycling Exif Orientation tag
 Return\tAccept current geometry for image
 G\tZoom to current image geometry
 Canc\tForget current geometry (remove from playlist)
 I\tPrint image and window data
 Space\tGo to next image
 Backspace\tGo to previous image
+<\tShift the image backward into the playlist
+>\tShift the image forward into the playlist
 P\tToggle autoplay
 S\tSave the playlist with updated gemetries
 Q\tQuit program"""
@@ -666,6 +668,12 @@ Q\tQuit program"""
         elif event.key() == QtCore.Qt.Key_S:
             """ Save the playlist with updated gemetries """
             self.savePlaylist()
+        elif event.key() == QtCore.Qt.Key_Less:
+            """ Shift current image backward in playlist """
+            self.shiftBackward()
+        elif event.key() == QtCore.Qt.Key_Greater:
+            """ Shift current image forward in playlist """
+            self.shiftForward()
         elif event.key() == QtCore.Qt.Key_Q:
             """ Quit program """
             self.close()
@@ -828,8 +836,29 @@ Q\tQuit program"""
         self.setPalette(palette)
 
 
+    def swapImages(self, a, b):
+        """ Swap two images (actually the elements of dicts image_names and image_geometries) """
+        self.image_names[a], self.image_names[b] = self.image_names[b], self.image_names[a]
+        self.image_geometries[a], self.image_geometries[b] = self.image_geometries[b], self.image_geometries[a]
+
+
+    def shiftBackward(self):
+        """ Shift the current image one position backward into the playlist """
+        if len(self.image_indexes) >= 2:
+            self.swapImages(self.image_indexes[0], self.image_indexes[-1])
+            self.playlist_changed = True
+            self.nextImage(-1)
+
+
+    def shiftForward(self):
+        """ Shift the current image one position forward into the playlist """
+        if len(self.image_indexes) >= 2:
+            self.swapImages(self.image_indexes[0], self.image_indexes[1])
+            self.playlist_changed = True
+            self.nextImage()
+
     def savePlaylist(self):
-        """ Save a new playlist file, with udated images geometries """
+        """ Save a new playlist file, with updated images geometries """
         # Rewind images list to the first item.
         offset = list(self.image_indexes).index(self.first_image_index)
         self.image_indexes.rotate(-offset)
