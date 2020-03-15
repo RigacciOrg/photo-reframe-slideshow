@@ -104,16 +104,19 @@ F11 or F  Toggle fullscreen mode
 W         Zoom to fit image width
 H         Zoom to fit image height
 Z         Zoom-in to remove blank space
-R         Update image cycling Exif Orientation tag
+R         Update image by cycling Exif Orientation tag
 Return    Accept current geometry for image
 G         Zoom to current image geometry
 Canc      Forget current geometry (remove from playlist)
 I         Print image and window data
 Space     Go to next image
 Backspace Go to previous image
+<         Shift the image backward into the playlist
+>         Shift the image forward into the playlist
+C         Toggle display of Exif UserComment
 P         Toggle autoplay
 S         Save the playlist with updated gemetries
-Q         Quit program
+Q         Quit program"""
 ```
 
 When the program run in window mode, it will show the image into 
