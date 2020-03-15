@@ -36,13 +36,13 @@ from PIL import Image, ExifTags
 
 from PyQt5 import QtCore
 from PyQt5.QtGui import QPixmap, QColor, QTransform, QPalette, QCursor
-from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox
+from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox, QLabel
 
 __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
@@ -71,14 +71,22 @@ GEOMETRY_FLAG_NOTSET = '#ff7c7c'   # Red
 GEOMETRY_FLAG_UNKNOWN = '#ffff7c'  # Yellow
 GEOMETRY_FLAG_BLACK = '#000000'    # Black used in full-screen
 
-# Search the Exif numeric key for Orientation tag.
-ORIENTATION_TAG = None
-for tag in ExifTags.TAGS.keys():
-    if ExifTags.TAGS[tag] == 'Orientation':
-        ORIENTATION_TAG = tag
-        break
-if ORIENTATION_TAG == None:
-    print(u'ERROR: Exif Orientation tag not found in PIL library')
+QLABEL_CSS = """QLabel {
+    font: %dpx;
+    color: #ffff00;
+    font-weight: regular;
+    font-family: "Helvetica";
+    background-color: rgba(0, 0, 0, 0.5);
+}"""
+
+# Verify the Exif keys for Orientation and UserComment tags.
+ORIENTATION_TAG = 274
+USERCOMMENT_TAG = 37510
+if ExifTags.TAGS[ORIENTATION_TAG] != 'Orientation':
+    print(u'ERROR: Exif Orientation tag does not match in PIL library')
+    sys.exit(1)
+if ExifTags.TAGS[USERCOMMENT_TAG] != 'UserComment':
+    print(u'ERROR: Exif UserComment tag does not match in PIL library')
     sys.exit(1)
 
 # Exif Orientation tags handled by this app.
@@ -205,6 +213,8 @@ class photoReframeApp(QMainWindow):
 
         self.current_image = None         # Filename (no path) of currently displayed image.
         self.exif_orientation_tag = None  # Image's Exif Orientation tag (see EXIF_ROTATE dictionary).
+        self.exif_usercomment = None      # Image subtitle from Exif UserComment.
+        self.caption_display = True       # Toggle display of Exif UserComment.
         self.image_rotate = None          # Rotation (in degrees) imposed by exif_orientation_tag.
         self.image_width = None           # Width in pixels of current image, Exif rotation applied.
         self.image_height = None          # Height in pixels of current image, Exif rotation applied.
@@ -223,6 +233,7 @@ class photoReframeApp(QMainWindow):
         parser.add_argument('-p', '--play', action='store_true', help='start slideshow')
         parser.add_argument('--timer', type=float, default=DEFAULT_SLIDE_TIME, help='slideshow timer in seconds (default %.1f)' % (DEFAULT_SLIDE_TIME,))
         args = parser.parse_args()
+        args.playlist = args.playlist.decode('utf-8')
 
         # Determines screen width/height ratio.
         try:
@@ -297,6 +308,7 @@ class photoReframeApp(QMainWindow):
         self.view.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         view_width, view_height = self.calculateImageViewSize()
         self.view.resize(view_width, view_height)
+        self.caption_label = QLabel(self)
 
         # Go fullscreen if requested.
         if args.fullscreen:
@@ -311,6 +323,28 @@ class photoReframeApp(QMainWindow):
             self.timer.start(self.slide_time * 1000)
 
         self.nextImage(0)
+
+
+    def showImageCaption(self):
+        """ Show the image caption into a subtitle-like label """
+
+        self.caption_label.clear()
+        if self.caption_display is False or self.exif_usercomment is None:
+            self.caption_label.resize(0, 0)
+            return
+        width, height = self.calculateImageViewSize()
+        pad_x, pad_y = self.calculateImageViewPadding()
+        font_px = int(height * 0.028)
+        label_pad_x = int(font_px * 0.50)
+        label_pad_y = int(font_px * 0.10)
+        label_margin_bottom = int(font_px * 0.50)
+        self.caption_label.setText(self.exif_usercomment)
+        self.caption_label.setStyleSheet(QLABEL_CSS % (font_px,))
+        self.caption_label.setAlignment(QtCore.Qt.AlignCenter)
+        label_w = self.caption_label.sizeHint().width() + label_pad_x * 2
+        label_h = self.caption_label.sizeHint().height() + label_pad_y * 2
+        self.caption_label.resize(label_w, label_h)
+        self.caption_label.move(pad_x + (width - label_w) / 2, (height - label_h + pad_y - label_margin_bottom))
 
 
     def readPlaylist(self):
@@ -379,7 +413,7 @@ class photoReframeApp(QMainWindow):
 
         print(u'\nCurrent image = "%s"' % (self.current_image,))
         filename = os.path.join(self.directory, self.current_image)
-        self.exif_orientation_tag = self.getExifOrientationTag(filename)
+        self.getExifTag(filename)
         self.image_rotate = EXIF_ROTATE[self.exif_orientation_tag]
         print(u'Exif Orientation tag = %s' % (self.exif_orientation_tag,))
 
@@ -416,6 +450,7 @@ class photoReframeApp(QMainWindow):
             self.zoom = 1.0
             self.fitImageHeight(fullHeight=True)
         self.showGeometryFlag()
+        self.showImageCaption()
         #print('self.view.transform().m11() (horizontal scaling factor)    = %s' % (self.view.transform().m11(),))
         #print('self.view.transform().m12() (vertical shearing factor)     = %s' % (self.view.transform().m12(),))
         #print('self.view.transform().m13() (horizontal projection factor) = %s' % (self.view.transform().m13(),))
@@ -428,24 +463,67 @@ class photoReframeApp(QMainWindow):
         #print('self.view.transform().isRotating() = %s' % (self.view.transform().isRotating(),))
 
 
-    def getExifOrientationTag(self, filename):
-        """ Return the Exif Orientation tag from filename """
+    def utf16_guess_decode(self, string):
+        """ Try to guess Little-Endian or Big-Endian encoding, default is LE """
+
+        try:
+            lit_endian = string.decode('utf-16le').strip()
+        except:
+            lit_endian = ''
+        try:
+            big_endian = string.decode('utf-16be').strip()
+        except:
+            big_endian = ''
+
+        if lit_endian == '' and big_endian == '':
+            return ''
+        elif lit_endian == '' or ord(lit_endian[0]) >= 0x4000:
+            # If the codepoint of first char is too high, use the other guess.
+            return big_endian
+        else:
+            return lit_endian
+
+
+    def decodeExifUserComment(self, exif_tag):
+        """ Get the string from an Exif UserComment tag, with proper decoding """
+
+        code_id = exif_tag[0:8].upper()
+        if code_id.startswith('ASCII'):
+            user_comment = exif_tag[8:].decode('ascii', 'ignore').rstrip()
+        elif code_id.startswith('JIS'):
+            user_comment = exif_tag[8:].decode('iso2022_jp', 'ignore').rstrip()
+        elif code_id.startswith('UNICODE'):
+            # Guess the byte order, because ExifByteOrder tag is not widely used.
+            user_comment = self.utf16_guess_decode(exif_tag[8:]).rstrip()
+        elif code_id.startswith('\0' * 8):
+            user_comment = exif_tag[8:].decode('utf-8', 'ignore').rstrip()
+        else:
+            user_comment = exif_tag.decode('utf-8', 'ignore').strip()
+        if len(user_comment) == 0:
+            user_comment = None
+        return user_comment
+
+
+    def getExifTag(self, filename):
+        """ Set self.exif_orientation_tag and self.exif_usercomment from Exif tags """
 
         # Assume Exif Orientation tag = 1, if missing.
-        exif_orientation_tag = 1
+        self.exif_orientation_tag = 1
+        self.exif_usercomment = None
         try:
             # Get Exif Orientation from image.
             exif_data = Image.open(filename)._getexif()
             if exif_data != None:
                 exif = dict(exif_data.items())
                 if ORIENTATION_TAG in exif.keys():
-                    exif_orientation_tag = int(exif[ORIENTATION_TAG])
+                    self.exif_orientation_tag = int(exif[ORIENTATION_TAG])
+                if USERCOMMENT_TAG in exif.keys():
+                    self.exif_usercomment = self.decodeExifUserComment(exif[USERCOMMENT_TAG])
         except Exception as e:
             print(u'Error getting Exif data from image "%s": %s' % (os.path.basename(filename), str(e)))
-        if exif_orientation_tag not in EXIF_ORIENTATION_TAGS:
-            print(u'Invalid Exif Orientation tag: %s, assuming 1' % (exif_orientation_tag,))
-            exif_orientation_tag = 1
-        return exif_orientation_tag
+        if self.exif_orientation_tag not in EXIF_ORIENTATION_TAGS:
+            print(u'Invalid Exif Orientation tag: %s, assuming 1' % (self.exif_orientation_tag,))
+            self.exif_orientation_tag = 1
 
 
     def spitImageStatus(self):
@@ -501,6 +579,7 @@ class photoReframeApp(QMainWindow):
         self.view.resize(view_width, view_height)
         padding_x, padding_y = self.calculateImageViewPadding()
         self.view.move(padding_x, padding_y)
+        self.showImageCaption()
         if self.current_image is not None:
             self.zoomToGeometry()
 
@@ -588,6 +667,7 @@ Space\tGo to next image
 Backspace\tGo to previous image
 <\tShift the image backward into the playlist
 >\tShift the image forward into the playlist
+C\tToggle display of Exif UserComment
 P\tToggle autoplay
 S\tSave the playlist with updated gemetries
 Q\tQuit program"""
@@ -662,6 +742,10 @@ Q\tQuit program"""
         elif event.key() == QtCore.Qt.Key_Backspace:
             """ Go to previous image """
             self.nextImage(-1)
+        elif event.key() == QtCore.Qt.Key_C:
+            """ Toggle Exif UserComment caption """
+            self.caption_display = not self.caption_display
+            self.showImageCaption()
         elif event.key() == QtCore.Qt.Key_P:
             """ Toggle autoplay of images """
             self.toggleAutoplay()
