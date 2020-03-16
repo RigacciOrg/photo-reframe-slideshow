@@ -511,9 +511,9 @@ class photoReframeApp(QMainWindow):
             # Guess the byte order. ExifByteOrder tag is not widely used.
             user_comment = utf16_guess_decode(content).rstrip()
         elif code_id.startswith('\0' * 8):
-            user_comment = nullTerminate(content).decode('utf-8', 'ignore').rstrip()
+            user_comment = nullTerminate(content.decode('utf-8', 'ignore')).rstrip()
         else:
-            user_comment = nullTerminate(content).decode('utf-8', 'ignore').strip()
+            user_comment = nullTerminate(exif_tag.decode('utf-8', 'ignore')).strip()
         if len(user_comment) == 0:
             user_comment = None
         return user_comment
