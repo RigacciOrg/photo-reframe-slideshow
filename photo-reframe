@@ -43,7 +43,7 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
@@ -234,8 +234,24 @@ class photoView(QGraphicsView):
 
 
     def keyPressEvent(self, event):
-        """ When panning with arrow keys, invalidate the geometry flag """
+        """ Some keys are intercepted for fast browsing, others default for panning """
+        # PageUp, PageDown, Home and End are used for fast browsing.
+        if event.key() == QtCore.Qt.Key_PageUp:
+            myMainWindow.nextImage(-10)
+            return
+        if event.key() == QtCore.Qt.Key_PageDown:
+            myMainWindow.nextImage(10)
+            return
+        if event.key() == QtCore.Qt.Key_Home:
+            bakward = (myMainWindow.current_index - 1)
+            myMainWindow.nextImage(-bakward)
+            return
+        if event.key() == QtCore.Qt.Key_End:
+            forward = len(myMainWindow.image_indexes) - myMainWindow.current_index
+            myMainWindow.nextImage(forward)
+            return
         super(photoView, self).keyPressEvent(event)
+        # When panning with arrow keys, invalidate the geometry flag.
         if event.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Up, QtCore.Qt.Key_Right, QtCore.Qt.Key_Down):
             myMainWindow.showGeometryFlag(view_moved=True)
 
@@ -698,6 +714,10 @@ Canc\tForget current geometry (remove from playlist)
 I\tPrint image and window data
 Space\tGo to next image
 Backspace\tGo to previous image
+PgDown\tAdvance by 10 images
+PgUp\tBackward by 10 images
+Home\tGo to the first image
+End\tGo to the last image
 <\tShift the image backward into the playlist
 >\tShift the image forward into the playlist
 C\tToggle display of Exif UserComment
