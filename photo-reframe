@@ -723,7 +723,7 @@ End\tGo to the last image
 C\tToggle display of Exif UserComment
 P\tToggle autoplay
 S\tSave the playlist with updated gemetries
-Q\tQuit program"""
+Esc or Q\tQuit program"""
         dlg.setText(msg)
         dlg.setIcon(QMessageBox.Information)
         dlg.setInformativeText(u'Version: %s\n%s' % (__version__, __copyright__))
@@ -811,7 +811,7 @@ Q\tQuit program"""
         elif event.key() == QtCore.Qt.Key_Greater:
             """ Shift current image forward in playlist """
             self.shiftForward()
-        elif event.key() == QtCore.Qt.Key_Q:
+        elif event.key() == QtCore.Qt.Key_Q or event.key() == QtCore.Qt.Key_Escape:
             """ Quit program """
             self.close()
 
@@ -1002,6 +1002,7 @@ Q\tQuit program"""
         print(u'Saving updated playlist "%s"' % (self.playlist,))
         try:
             with open(self.playlist, 'w') as f:
+                f.write('#EXTM3U-PHOTO-REFRAME\n')
                 for i in self.image_indexes:
                     if self.image_geometries[i] is not None:
                         print('%s|%s' % (self.image_names[i], self.image_geometries[i]))
