@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+    <mime-type type="application/x-playlist">
+        <comment>M3U Images Playlist</comment>
+        <icon name="applications-graphics"/>
+        <magic priority="60">
+            <match offset="0" type="string" value="#EXTM3U-PHOTO-REFRAME"/>
+        </magic>
+        <glob pattern="*.m3u" weight="60"/>
+    </mime-type>
+</mime-info>

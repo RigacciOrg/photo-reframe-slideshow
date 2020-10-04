@@ -36,26 +36,29 @@ from PIL import Image, ExifTags
 
 from PyQt5 import QtCore
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap, QColor, QTransform, QPalette, QCursor
+from PyQt5.QtGui import QPixmap, QColor, QTransform, QPalette, QCursor, QBrush
 from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox, QLabel
 
 __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
 
 # Command line options defaults.
 DEFAULT_FRAME_RATIO = '16x9'
-DEFAULT_SLIDE_TIME = 4.0
+DEFAULT_SLIDE_TIME = 6.0
 
 PLAYLIST = 'playlist'
 PLAYLIST_EXT = 'm3u'
 EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff')
 GEOMETRY_RE = '(\d+)x(\d+)\+(\d+)\+(\d+)'
+
+# Ignore these filenames when scanning directory for images.
+IGNORE_FILES = ['folder.jpg']
 
 # Window's app default size (desktop space percentage).
 WIN_X = 0.01
@@ -63,14 +66,20 @@ WIN_Y = 0.06
 WIN_WIDTH = 0.64
 WIN_HEIGHT = 0.68
 
+# Exit codes.
+EXIT_CODE_OK = 0
+EXIT_CODE_ERR = 1
+EXIT_CODE_QUIT = 2
+
 # Padding around image rectangle. Will be zero at full-screen.
 IMG_PADDING_X = 6
 IMG_PADDING_Y = 6
 
+BACKGROUND_COLOR = '#000000'       # Color to fill image backgroun
 GEOMETRY_FLAG_SET = '#7cff7c'      # Green
 GEOMETRY_FLAG_NOTSET = '#ff7c7c'   # Red
-GEOMETRY_FLAG_UNKNOWN = '#ffff7c'  # Yellow
-GEOMETRY_FLAG_BLACK = '#000000'    # Black used in full-screen
+GEOMETRY_FLAG_CHANGED = '#ffff7c'  # Yellow
+GEOMETRY_FLAG_HIDE = '#000000'     # Border hidden in full-screen
 
 QLABEL_CSS = """QLabel {
     font: %dpx;
@@ -85,10 +94,10 @@ ORIENTATION_TAG = 274
 USERCOMMENT_TAG = 37510
 if ExifTags.TAGS[ORIENTATION_TAG] != 'Orientation':
     print(u'ERROR: Exif Orientation tag does not match in PIL library')
-    sys.exit(1)
+    sys.exit(EXIT_CODE_ERR)
 if ExifTags.TAGS[USERCOMMENT_TAG] != 'UserComment':
     print(u'ERROR: Exif UserComment tag does not match in PIL library')
-    sys.exit(1)
+    sys.exit(EXIT_CODE_ERR)
 
 # Exif Orientation tags handled by this app.
 EXIF_ORIENTATION_TAGS = (1, 3, 6, 8)
@@ -141,6 +150,11 @@ def nullTerminate(string):
         return string
 
 
+def percDiff(int1, int2):
+    """ Return the difference percentage between integers int1 and int2 """
+    return float(abs(int1 - int2)) / int1
+
+
 # ------------------------------------------------------------------------
 # ------------------------------------------------------------------------
 class getImageState():
@@ -148,6 +162,7 @@ class getImageState():
 
     def __init__(self, mainWindow):
         """ Do the math, rounded to the nearest integer """
+        self.image_name = mainWindow.current_image
         self.image_width = mainWindow.image_width
         self.image_height = mainWindow.image_height
         self.scene_width = mainWindow.scene.width()
@@ -174,25 +189,27 @@ class getImageState():
 
     def fixGeometry(self):
         """ Fix rounding errors in geometry calculation """
-        # Force the geometry size into the image size.
+        print(u'Calculated geometry: %s|%dx%d+%d+%d' % (self.image_name, self.geom_width, self.geom_height, self.geom_x, self.geom_y))
         if self.geom_x < 0:
             self.geom_x = 0
         if self.geom_y < 0:
             self.geom_y = 0
-        if self.geom_width > self.image_width:
+        # For small (< 1%) differencies use image size instead of selected geometry.
+        diff = percDiff(self.geom_width, self.image_width)
+        if diff > 0 and diff < 0.01:
+            print("geom_width = %d, image_width = %d: using the second one" % (self.geom_width, self.image_width))
             self.geom_width = self.image_width
-        if self.geom_height > self.image_height:
+        diff = percDiff(self.geom_height, self.image_height)
+        if diff > 0 and diff < 0.01:
+            print("geom_height = %d, image_height = %d: using the second one" % (self.geom_height, self.image_height))
             self.geom_height = self.image_height
         # Force aspect ratio, but warn if corrected.
         proper_height = int(float(self.geom_width) / self.frame_ratio_width * self.frame_ratio_height)
-        if self.geom_height != proper_height:
-            print(u'Adjusting geometry height: %d => %d' % (self.geom_height, proper_height))
+        diff = percDiff(self.geom_height, proper_height)
+        if diff > 0 and diff < 0.01:
+            print(u'geom_height = %d, using %d to respect ratio' % (self.geom_height, proper_height))
             self.geom_height = proper_height
-        # Force the geometry offset to not exceed the image size.
-        if self.geom_width + self.geom_x > self.image_width:
-            self.geom_x = self.image_width - self.geom_width
-        if self.geom_height + self.geom_y > self.image_height:
-            self.geom_y = self.image_height - self.geom_height
+        print(u'Fixed geometry: %s|%dx%d+%d+%d' % (self.image_name, self.geom_width, self.geom_height, self.geom_x, self.geom_y))
 
 
 # ------------------------------------------------------------------------
@@ -243,12 +260,14 @@ class photoView(QGraphicsView):
             myMainWindow.nextImage(10)
             return
         if event.key() == QtCore.Qt.Key_Home:
-            bakward = (myMainWindow.current_index - 1)
-            myMainWindow.nextImage(-bakward)
+            new_pos = list(myMainWindow.images_playlist).index(myMainWindow.first_image_index)
+            if new_pos != 0:
+                myMainWindow.nextImage(new_pos)
             return
         if event.key() == QtCore.Qt.Key_End:
-            forward = len(myMainWindow.image_indexes) - myMainWindow.current_index
-            myMainWindow.nextImage(forward)
+            new_pos = list(myMainWindow.images_playlist).index(myMainWindow.last_image_index)
+            if new_pos != 0:
+                myMainWindow.nextImage(new_pos)
             return
         super(photoView, self).keyPressEvent(event)
         # When panning with arrow keys, invalidate the geometry flag.
@@ -272,11 +291,15 @@ class photoReframeApp(QMainWindow):
         self.directory = None             # Base directory for playlist and images.
         self.playlist = None              # Playlist filename, with path.
         self.playlist_changed = False     # Becomes true when setting an image geometry.
+        self.shuffle = False              # Show images in random order.
+        self.loop_counter = 1             # How many loop of slide show to play, -1 = infinite.
 
-        self.image_indexes = deque([])    # Double-ended queue (list) with images indexes.
+        self.images_playlist = deque([])  # Double-ended queue (list) with images indexes in play order.
         self.image_names = {}             # Dictionary with the filename for each image index.
         self.image_geometries = {}        # Dictionary with the geometry for each image (or None).
-        self.first_image_index = None     # Index into self.image_indexes[] for the first image to show.
+        self.first_image_index = None     # Index of the first image to show.
+        self.last_image_index = None      # Index of the last image to show.
+        self.current_index = None         # Index of the image currently displayed.
 
         self.current_image = None         # Filename (no path) of currently displayed image.
         self.exif_orientation_tag = None  # Image's Exif Orientation tag (see EXIF_ROTATE dictionary).
@@ -298,7 +321,9 @@ class photoReframeApp(QMainWindow):
         parser.add_argument('-f', '--fullscreen', action='store_true', help='start in fullscreen mode')
         parser.add_argument('-r', '--ratio', metavar='WxH', type=str, default=DEFAULT_FRAME_RATIO, help='screen ratio, width x height (default %s)' % (DEFAULT_FRAME_RATIO,))
         parser.add_argument('-p', '--play', action='store_true', help='start slideshow')
-        parser.add_argument('--timer', type=float, default=DEFAULT_SLIDE_TIME, help='slideshow timer in seconds (default %.1f)' % (DEFAULT_SLIDE_TIME,))
+        parser.add_argument('--loop', type=int, default=-1, help='for --play mode only: exit after LOOP slideshow repeat (default -1, endless)')
+        parser.add_argument('--timer', type=float, default=DEFAULT_SLIDE_TIME, help='time for each slide in seconds (default %.1f)' % (DEFAULT_SLIDE_TIME,))
+        parser.add_argument('-s', '--shuffle', action='store_true', help='show images in random order')
         args = parser.parse_args()
         args.playlist = args.playlist.decode('utf-8')
 
@@ -321,7 +346,7 @@ class photoReframeApp(QMainWindow):
             self.directory = os.path.dirname(self.playlist)
         elif not os.path.isdir(args.playlist):
             print(u'Path "%s" does not exists' % (args.playlist,))
-            sys.exit(1)
+            sys.exit(EXIT_CODE_ERR)
         else:
             # The passed argument is a directory.
             self.directory = args.playlist
@@ -337,17 +362,25 @@ class photoReframeApp(QMainWindow):
                 self.playlist = p1
         print(u'Using playlist "%s" from directory "%s"' % (os.path.basename(self.playlist), self.directory,))
 
+        self.shuffle = args.shuffle
         self.slide_time = args.timer
+        if args.play:
+            self.loop_counter = args.loop
+        else:
+            self.loop_counter = -1
 
         # Build the lists (names, geometries) of images.
         self.readPlaylist()
         self.scanDirectory()
-        if len(self.image_indexes) < 1:
+        if len(self.images_playlist) < 1:
             print(u'No images found in "%s"' % (self.directory,))
-            sys.exit(1)
-        self.first_image_index = self.image_indexes[0]
+            sys.exit(EXIT_CODE_ERR)
+        if self.shuffle:
+            random.shuffle(self.images_playlist)
+        self.first_image_index = self.images_playlist[0]
+        self.last_image_index = self.images_playlist[-1]
 
-        # Position the window into the screen.
+        # Place the window into the screen.
         screen_width = app.desktop().availableGeometry().width()
         screen_height = app.desktop().availableGeometry().height()
         print(u'Screen resolution: %dx%d' % (screen_width, screen_height))
@@ -369,6 +402,7 @@ class photoReframeApp(QMainWindow):
         # size and position will be determined on resizeEvent().
         self.view = photoView(self.scene, self)
         self.view.setFrameStyle(QFrame.NoFrame)
+        self.view.setBackgroundBrush(QBrush(QColor(BACKGROUND_COLOR), Qt.SolidPattern))
         # Allow mouse scroll and drag, but hide scrollbars.
         self.view.setDragMode(QGraphicsView.ScrollHandDrag)
         self.view.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
@@ -376,7 +410,6 @@ class photoReframeApp(QMainWindow):
         view_width, view_height = self.calculateImageViewSize()
         self.view.resize(view_width, view_height)
         self.caption_label = QLabel(self)
-
         # Go fullscreen if requested.
         if args.fullscreen:
             self.toggleFullscreen()
@@ -389,7 +422,8 @@ class photoReframeApp(QMainWindow):
         if args.play:
             self.timer.start(self.slide_time * 1000)
 
-        self.nextImage(0)
+        self.images_playlist.rotate(1)
+        self.nextImage()
 
 
     def showImageCaption(self):
@@ -415,7 +449,7 @@ class photoReframeApp(QMainWindow):
 
 
     def readPlaylist(self):
-        """ Read playlist from directory, fill image_indexes[], image_names{} and geometry{} """
+        """ Read playlist from directory, fill images_playlist[], image_names{} and geometry{} """
         if os.path.isfile(self.playlist):
             with open(self.playlist, 'r') as f:
                 for line in f:
@@ -429,29 +463,31 @@ class photoReframeApp(QMainWindow):
                     else:
                         img_name, img_geometry = line, None
                     if os.path.isfile(os.path.join(self.directory, img_name)):
-                        new_index = len(self.image_indexes) + 1
-                        self.image_indexes.append(new_index)
+                        new_index = len(self.images_playlist) + 1
+                        self.images_playlist.append(new_index)
                         self.image_names[new_index] = img_name
                         self.image_geometries[new_index] = img_geometry
                     else:
                         print(u'WARNING: Image in playlist does not exists: "%s"' % (img_name,))
-        print(u'Read file "%s": %d images' % (self.playlist, len(self.image_indexes)))
+        print(u'Read file "%s": %d images' % (self.playlist, len(self.images_playlist)))
 
 
     def scanDirectory(self):
-        """ Scan directory for images, merge into image_indexes[] and image_names{} """
+        """ Scan directory for images, merge into images_playlist[] and image_names{} """
         files = os.listdir(self.directory)
         files.sort()
         for f in files:
+            if f in IGNORE_FILES:
+                continue
             if os.path.isfile(os.path.join(self.directory, f)):
                 name, ext = os.path.splitext(f)
                 if ext.lower() in EXTENSIONS:
                     if f not in self.image_names.values():
-                        new_index = len(self.image_indexes) + 1
-                        self.image_indexes.append(new_index)
+                        new_index = len(self.images_playlist) + 1
+                        self.images_playlist.append(new_index)
                         self.image_names[new_index] = f
                         self.image_geometries[new_index] = None
-        print(u'Merged images from "%s": total %d images' % (self.directory, len(self.image_indexes)))
+        print(u'Merged images from "%s": total %d images' % (self.directory, len(self.images_playlist)))
 
 
     def nextImage(self, direction=1):
@@ -462,8 +498,15 @@ class photoReframeApp(QMainWindow):
         skipped = 0
         skip_this_image = True
         while skip_this_image:
-            self.image_indexes.rotate(-direction)
-            self.current_index = self.image_indexes[0]
+            self.images_playlist.rotate(-direction)
+            self.current_index = self.images_playlist[0]
+            # If in auto-play mode, check if repeat loop is over.
+            if self.timer.isActive():
+                if self.current_index == self.first_image_index:
+                    if self.loop_counter > 0:
+                        self.loop_counter -= 1
+                    elif self.loop_counter == 0:
+                        app.exit(EXIT_CODE_OK)
             self.current_image = self.image_names[self.current_index]
             self.current_geometry = self.image_geometries[self.current_index]
             if not self.timer.isActive():
@@ -473,7 +516,7 @@ class photoReframeApp(QMainWindow):
                     skip_this_image = False
                 else:
                     skipped += 1
-                    if skipped >= len(self.image_indexes):
+                    if skipped >= len(self.images_playlist):
                         print(u'Slideshow is running, but no images with geometry found')
                         self.toggleAutoplay()
                         skip_this_image = False
@@ -588,9 +631,6 @@ class photoReframeApp(QMainWindow):
         print(u'Zoom = %s' % (self.zoom,))
         print(u'horizontalScrollBar() = %s' % (s.horizontal_scroll,))
         print(u'verticalScrollBar() = %s' % (s.vertical_scroll,))
-        print(u'Calculated geometry: %s|%dx%d+%d+%d' % (self.current_image, s.geom_width, s.geom_height, s.geom_x, s.geom_y))
-        s.fixGeometry()
-        print(u'Fixed geometry: %s|%dx%d+%d+%d' % (self.current_image, s.geom_width, s.geom_height, s.geom_x, s.geom_y))
 
 
     def spitWindowSizes(self):
@@ -874,6 +914,9 @@ Esc or Q\tQuit program"""
                 pass
             else:
                 event.ignore()
+                return
+        event.accept()
+        app.exit(EXIT_CODE_QUIT)
 
 
     def setScaleAndRotate(self):
@@ -960,12 +1003,15 @@ Esc or Q\tQuit program"""
 
 
     def showGeometryFlag(self, view_moved=False):
-        """ Show a flag about geometry settings for the current image """
+        """ Show the geometry state for the current image """
+        # The window background is visible as a colored border around the
+        # image (but hidden at fullscreen). The border color represents
+        # the geometry state: SET, NOTSET or CHANGED (not saved jet).
         palette = QPalette()
         if self.isFullScreen():
-            palette.setColor(QPalette.Background, QColor(GEOMETRY_FLAG_BLACK))
+            palette.setColor(QPalette.Background, QColor(GEOMETRY_FLAG_HIDE))
         elif view_moved and self.current_geometry is not None:
-            palette.setColor(QPalette.Background, QColor(GEOMETRY_FLAG_UNKNOWN))
+            palette.setColor(QPalette.Background, QColor(GEOMETRY_FLAG_CHANGED))
         elif self.current_geometry is None:
             palette.setColor(QPalette.Background, QColor(GEOMETRY_FLAG_NOTSET))
         else:
@@ -981,37 +1027,41 @@ Esc or Q\tQuit program"""
 
     def shiftBackward(self):
         """ Shift the current image one position backward into the playlist """
-        if len(self.image_indexes) >= 2:
-            self.swapImages(self.image_indexes[0], self.image_indexes[-1])
+        if self.shuffle:
+            print("Cannot shift image position in shuffle mode.")
+            return
+        if len(self.images_playlist) >= 2:
+            self.swapImages(self.images_playlist[0], self.images_playlist[-1])
             self.playlist_changed = True
             self.nextImage(-1)
 
 
     def shiftForward(self):
         """ Shift the current image one position forward into the playlist """
-        if len(self.image_indexes) >= 2:
-            self.swapImages(self.image_indexes[0], self.image_indexes[1])
+        if self.shuffle:
+            print("Cannot shift image position in shuffle mode.")
+            return
+        if len(self.images_playlist) >= 2:
+            self.swapImages(self.images_playlist[0], self.images_playlist[1])
             self.playlist_changed = True
             self.nextImage()
 
     def savePlaylist(self):
         """ Save a new playlist file, with updated images geometries """
-        # Rewind images list to the first item.
-        offset = list(self.image_indexes).index(self.first_image_index)
-        self.image_indexes.rotate(-offset)
         print(u'Saving updated playlist "%s"' % (self.playlist,))
         try:
             with open(self.playlist, 'w') as f:
                 f.write('#EXTM3U-PHOTO-REFRAME\n')
-                for i in self.image_indexes:
+                for i in range(1, len(self.images_playlist) + 1):
                     if self.image_geometries[i] is not None:
                         print('%s|%s' % (self.image_names[i], self.image_geometries[i]))
                         f.write('%s|%s\n' % (self.image_names[i], self.image_geometries[i]))
+                    else:
+                        print('%s|' % (self.image_names[i],))
+                        f.write('%s|\n' % (self.image_names[i],))
             self.playlist_changed = False
         except Exception as e:
             print(u'Error saving playlist: %s' % (str(e),))
-        # Rewind list to previous position.
-        self.image_indexes.rotate(offset)
 
 
     def toggleFullscreen(self):
@@ -1027,6 +1077,7 @@ Esc or Q\tQuit program"""
         if self.timer.isActive():
             print(u'Stopping autoplay')
             self.timer.stop()
+            self.loop_counter = -1
         else:
             print(u'Starting autoplay')
             self.timer.start(self.slide_time * 1000)

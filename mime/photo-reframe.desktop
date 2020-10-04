@@ -1,0 +1,15 @@
+[Desktop Entry]
+# The format of this file is specified at
+# http://standards.freedesktop.org/desktop-entry-spec/1.0/
+# The entries are in the order they are listed in version 1.0
+Type=Application
+Version=1.0
+Name=Photo-Reframe
+GenericName=Image Viewer
+Comment=Slideshow with on-the-fly image cropping
+Icon=image
+TryExec=photo-reframe
+Exec=photo-reframe --fullscreen --play %f
+Terminal=false
+MimeType=application/x-image-playlist;
+Categories=Graphics;2DGraphics;RasterGraphics;Qt;

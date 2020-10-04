@@ -12,7 +12,9 @@ eventually fix a wrong Exif Orientation tag in images.
 Usage:
 
 ```
-usage: photo-reframe [-h] [-f] [-r WxH] [-p] [--timer TIMER] playlist
+usage: photo-reframe [-h] [-f] [-r WxH] [-p] [--loop LOOP] [--timer TIMER]
+                     [-s]
+                     playlist
 
 Show images listed in playlist, which contains "filename|geometry" entries.
 
@@ -24,7 +26,10 @@ optional arguments:
   -f, --fullscreen     start in fullscreen mode
   -r WxH, --ratio WxH  screen ratio, width x height (default 16x9)
   -p, --play           start slideshow
-  --timer TIMER        slideshow timer in seconds (default 4.0)
+  --loop LOOP          for --play mode only: exit after LOOP slideshow repeat
+                       (default -1, endless)
+  --timer TIMER        time for each slide in seconds (default 6.0)
+  -s, --shuffle        show images in random order
 ```
 
 ## Slideshow Mode
@@ -70,7 +75,7 @@ the slideshow, and it is composed by four values:
 The cropped region is resized to occupy the entire screen. In 
 slideshow mode, only images listed in the playlist will be 
 automatically shown for the time specified by the **--timer** 
-command line option (default is 4 seconds).
+command line option (default is 6 seconds).
 
 You can arrange the image order etc. editing the playlist file. 
 Other images contained into the directory will not be shown.
