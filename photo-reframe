@@ -43,7 +43,7 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
@@ -292,7 +292,10 @@ class photoReframeApp(QMainWindow):
         self.playlist = None              # Playlist filename, with path.
         self.playlist_changed = False     # Becomes true when setting an image geometry.
         self.shuffle = False              # Show images in random order.
-        self.loop_counter = 1             # How many loop of slide show to play, -1 = infinite.
+        self.limit_loops = 0              # How many loop of slideshow to play; 0 = infinite.
+        self.loop_counter = 0             # Loop counter.
+        self.limit_slides = 0             # How many images to play; 0 = all the playlist.
+        self.slide_counter = 0            # Counter of shown images.
 
         self.images_playlist = deque([])  # Double-ended queue (list) with images indexes in play order.
         self.image_names = {}             # Dictionary with the filename for each image index.
@@ -321,9 +324,10 @@ class photoReframeApp(QMainWindow):
         parser.add_argument('-f', '--fullscreen', action='store_true', help='start in fullscreen mode')
         parser.add_argument('-r', '--ratio', metavar='WxH', type=str, default=DEFAULT_FRAME_RATIO, help='screen ratio, width x height (default %s)' % (DEFAULT_FRAME_RATIO,))
         parser.add_argument('-p', '--play', action='store_true', help='start slideshow')
-        parser.add_argument('--loop', type=int, default=-1, help='for --play mode only: exit after LOOP slideshow repeat (default -1, endless)')
         parser.add_argument('--timer', type=float, default=DEFAULT_SLIDE_TIME, help='time for each slide in seconds (default %.1f)' % (DEFAULT_SLIDE_TIME,))
-        parser.add_argument('-s', '--shuffle', action='store_true', help='show images in random order')
+        parser.add_argument('--shuffle', action='store_true', help='show images in random order')
+        parser.add_argument('--loop', type=int, default=-1, help='for --play mode only: exit after LOOP slideshow repeat (default 0: endless loop)')
+        parser.add_argument('--count', type=int, default=-1, help='for --play mode only: show only COUNT images (default 0: all the images)')
         args = parser.parse_args()
         args.playlist = args.playlist.decode('utf-8')
 
@@ -365,9 +369,8 @@ class photoReframeApp(QMainWindow):
         self.shuffle = args.shuffle
         self.slide_time = args.timer
         if args.play:
-            self.loop_counter = args.loop
-        else:
-            self.loop_counter = -1
+            self.limit_loops = args.loop
+            self.limit_slides = args.count
 
         # Build the lists (names, geometries) of images.
         self.readPlaylist()
@@ -503,10 +506,10 @@ class photoReframeApp(QMainWindow):
             # If in auto-play mode, check if repeat loop is over.
             if self.timer.isActive():
                 if self.current_index == self.first_image_index:
-                    if self.loop_counter > 0:
-                        self.loop_counter -= 1
-                    elif self.loop_counter == 0:
-                        app.exit(EXIT_CODE_OK)
+                    if self.limit_loops > 0:
+                        self.loop_counter += 1
+                        if self.loop_counter > self.limit_loops:
+                            app.exit(EXIT_CODE_OK)
             self.current_image = self.image_names[self.current_index]
             self.current_geometry = self.image_geometries[self.current_index]
             if not self.timer.isActive():
@@ -561,6 +564,14 @@ class photoReframeApp(QMainWindow):
             self.fitImageHeight(fullHeight=True)
         self.showGeometryFlag()
         self.showImageCaption()
+        if self.timer.isActive():
+            if self.limit_slides > 0:
+                self.slide_counter += 1
+                if self.slide_counter == self.limit_slides:
+                    # Skip forward to last image to start a new loop.
+                    i = list(self.images_playlist).index(self.last_image_index)
+                    self.images_playlist.rotate(-i)
+                    self.slide_counter = 0
         #print('self.view.transform().m11() (horizontal scaling factor)    = %s' % (self.view.transform().m11(),))
         #print('self.view.transform().m12() (vertical shearing factor)     = %s' % (self.view.transform().m12(),))
         #print('self.view.transform().m13() (horizontal projection factor) = %s' % (self.view.transform().m13(),))
@@ -1076,8 +1087,9 @@ Esc or Q\tQuit program"""
     def toggleAutoplay(self):
         if self.timer.isActive():
             print(u'Stopping autoplay')
+            self.limit_loops = 0
+            self.limit_slides = 0
             self.timer.stop()
-            self.loop_counter = -1
         else:
             print(u'Starting autoplay')
             self.timer.start(self.slide_time * 1000)
