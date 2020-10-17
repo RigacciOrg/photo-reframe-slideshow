@@ -37,16 +37,20 @@ from PIL import Image, ExifTags
 from PyQt5 import QtCore
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QColor, QTransform, QPalette, QCursor, QBrush
-from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox, QLabel
+from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox, QLabel, QInputDialog, QLineEdit
 
 __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.4.2"
+__version__ = "0.4.4"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
+
+# External command to share an image.
+# Filename and address are passed as arguments.
+SHARE_COMMAND = 'photo-share'
 
 # Command line options defaults.
 DEFAULT_FRAME_RATIO = '16x9'
@@ -80,6 +84,9 @@ GEOMETRY_FLAG_SET = '#7cff7c'      # Green
 GEOMETRY_FLAG_NOTSET = '#ff7c7c'   # Red
 GEOMETRY_FLAG_CHANGED = '#ffff7c'  # Yellow
 GEOMETRY_FLAG_HIDE = '#000000'     # Border hidden in full-screen
+
+# Exit read-only mode by pressing CHEAT_REPEAT_KEY_COUNT times "S", then "Y".
+CHEAT_REPEAT_KEY_COUNT = 7         
 
 QLABEL_CSS = """QLabel {
     font: %dpx;
@@ -303,6 +310,8 @@ class photoReframeApp(QMainWindow):
         self.first_image_index = None     # Index of the first image to show.
         self.last_image_index = None      # Index of the last image to show.
         self.current_index = None         # Index of the image currently displayed.
+        self.read_only = False            # If True inhibits the saving (overwriting) of the playlist.
+        self.force_save_cheat = 0         # Exit read-only mode by pressing several times "S", then "Y".
 
         self.current_image = None         # Filename (no path) of currently displayed image.
         self.exif_orientation_tag = None  # Image's Exif Orientation tag (see EXIF_ROTATE dictionary).
@@ -329,6 +338,7 @@ class photoReframeApp(QMainWindow):
         parser.add_argument('--shuffle', action='store_true', help='show images in random order')
         parser.add_argument('--loop', type=int, default=-1, help='for --play mode only: exit after LOOP slideshow repeat (default 0: endless loop)')
         parser.add_argument('--count', type=int, default=-1, help='for --play mode only: show only COUNT images (default 0: all the images)')
+        parser.add_argument('--read-only', action='store_true', help='disable playlist saving/overwriting')
         args = parser.parse_args()
         args.playlist = args.playlist.decode('utf-8')
 
@@ -375,6 +385,8 @@ class photoReframeApp(QMainWindow):
             self.limit_slides = args.count
         if args.no_usercomment:
             self.caption_display = False
+        if args.read_only:
+            self.read_only = True
 
         # Build the lists (names, geometries) of images.
         self.readPlaylist()
@@ -752,9 +764,14 @@ class photoReframeApp(QMainWindow):
 
     def helpDialog(self):
         """ Show help message box """
+        if self.read_only:
+            read_only_tip = '(disabled)'
+        else:
+            read_only_tip = ''
         dlg = QMessageBox(self)
         dlg.setWindowTitle(u'%s Help' % (APP_TITLE,))
         msg = u"""F1 or ?\tShow this help
+F2\tShare With...
 F11 or F\tToggle fullscreen mode
 +\tZoom in
 -\tZoom out
@@ -777,8 +794,8 @@ End\tGo to the last image
 >\tShift the image forward into the playlist
 C\tToggle display of Exif UserComment
 P\tToggle autoplay
-S\tSave the playlist with updated gemetries
-Esc or Q\tQuit program"""
+S\tSave the playlist with updated gemetries %s
+Esc or Q\tQuit program""" % (read_only_tip,)
         dlg.setText(msg)
         dlg.setIcon(QMessageBox.Information)
         dlg.setInformativeText(u'Version: %s\n%s' % (__version__, __copyright__))
@@ -787,14 +804,18 @@ Esc or Q\tQuit program"""
         dlg.exec_()
 
 
-    #def contextMenuEvent(self, event):
-    #    from PyQt5.QtWidgets import QMenu
-    #    menu = QMenu()
-    #    menu.addSection(u'Photo Reframe Context Menu')
-    #    menu.setTitle(u'Photo Reframe Context Menu')
-    #    menu.addAction('F\tToggle fullscreen mode', myMainWindow.helpDialog)
-    #    menu.addAction('Q\tQuit program', myMainWindow.close)
-    #    menu.exec_(event.globalPos())
+    def shareDialog(self):
+        """ Show the input dialog for the Share With function """
+        dlg_title = u'%s - Share Image' % (APP_TITLE,)
+        dlg_msg = u'Share this image with:' + u' ' * 60
+        recipient, okPressed = QInputDialog.getText(self, dlg_title, dlg_msg, QLineEdit.Normal, '')
+        if okPressed and recipient != '':
+            cmd = [SHARE_COMMAND, os.path.join(self.directory, self.current_image), recipient]
+            print(u'Executing: %s' % (' '.join(cmd),))
+            try:
+                ret = subprocess.call(cmd)
+            except Exception as e:
+                print(u'Subprocess error: %s' % (str(e),))
 
 
     def keyPressEvent(self, event):
@@ -804,6 +825,9 @@ Esc or Q\tQuit program"""
         if event.key() == QtCore.Qt.Key_F1 or event.key() == QtCore.Qt.Key_Question:
             """ Show help dialog """
             self.helpDialog()
+        elif event.key() == QtCore.Qt.Key_F2:
+            """ Show Share With dialog """
+            self.shareDialog()
         elif event.key() == QtCore.Qt.Key_F11 or event.key() == QtCore.Qt.Key_F:
             """ Toggle fullscreen mode """
             self.toggleFullscreen()
@@ -859,7 +883,19 @@ Esc or Q\tQuit program"""
             self.toggleAutoplay()
         elif event.key() == QtCore.Qt.Key_S:
             """ Save the playlist with updated gemetries """
-            self.savePlaylist()
+            if not self.read_only:
+                self.savePlaylist()
+            else:
+                self.force_save_cheat += 1
+                if self.force_save_cheat > CHEAT_REPEAT_KEY_COUNT:
+                    self.force_save_cheat = 0
+        elif event.key() == QtCore.Qt.Key_Y:
+            if self.read_only:
+                if self.force_save_cheat == CHEAT_REPEAT_KEY_COUNT:
+                    self.read_only = False
+                    print(u'Read-only mode disabled!')
+                else:
+                    self.force_save_cheat = 0
         elif event.key() == QtCore.Qt.Key_Less:
             """ Shift current image backward in playlist """
             self.shiftBackward()
@@ -921,7 +957,7 @@ Esc or Q\tQuit program"""
         if self.isFullScreen():
             self.toggleFullscreen()
         # Ask to save current playlist geometries.
-        if self.playlist_changed:
+        if not self.read_only and self.playlist_changed:
             save_playlist = self.confirmSaveDialog()
             if save_playlist == QMessageBox.Yes:
                 self.savePlaylist()

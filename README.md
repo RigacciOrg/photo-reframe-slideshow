@@ -145,8 +145,8 @@ mode.
 
 The **--loop** and **--count** options make sense only with the 
 **--play** option. The first one control how many loop of the 
-playlist are required (default to endless loop), the secondo one 
-tell the program to play only some images from the playlist 
+playlist are required (default to endless loop), the second one 
+tells the program to play only some images from the playlist 
 (default to all).
 
 The **--read-only** option disables the saving (i.e. 
@@ -155,8 +155,8 @@ program is used for playback only, to avoid accidental changes
 to the playlist. There is a _cheat mode_ to force saving even in 
 read only mode, read the source code if you are interested.
 
-The **Share With...** function invoked with **F2** key, prompts 
-you for a recipient address. Then it executes the external 
+The **Share With...** function, invoked with **F2** key, prompts 
+you for a recipient address; then it executes the external 
 program defined by the **SHARE_COMMAND** variable, passing to it 
 the image filename and the recipient address as arguments. You 
 can create for example an external script to send the displayed 
