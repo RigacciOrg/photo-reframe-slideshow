@@ -12,8 +12,9 @@ eventually fix a wrong Exif Orientation tag in images.
 Usage:
 
 ```
-usage: photo-reframe [-h] [-f] [-r WxH] [-p] [--loop LOOP] [--timer TIMER]
-                     [-s]
+usage: photo-reframe [-h] [-f] [-r WxH] [-p] [--timer TIMER]
+                     [--no-usercomment] [--shuffle] [--loop LOOP]
+                     [--count COUNT] [--read-only]
                      playlist
 
 Show images listed in playlist, which contains "filename|geometry" entries.
@@ -26,10 +27,14 @@ optional arguments:
   -f, --fullscreen     start in fullscreen mode
   -r WxH, --ratio WxH  screen ratio, width x height (default 16x9)
   -p, --play           start slideshow
-  --loop LOOP          for --play mode only: exit after LOOP slideshow repeat
-                       (default -1, endless)
   --timer TIMER        time for each slide in seconds (default 6.0)
-  -s, --shuffle        show images in random order
+  --no-usercomment     default to Exif UserComment disabled
+  --shuffle            show images in random order
+  --loop LOOP          for --play mode only: exit after LOOP slideshow repeat
+                       (default 0: endless loop)
+  --count COUNT        for --play mode only: show only COUNT images (default
+                       0: all the images)
+  --read-only          disable playlist saving/overwriting
 ```
 
 ## Slideshow Mode
@@ -55,6 +60,7 @@ respective geometries, separated by a vertical bar, something
 like this:
 
 ```
+#EXTM3U-PHOTO-REFRAME
 IMG_6602.JPG|4000x2250+0+332
 IMG_6605.JPG|2971x1671+796+628
 IMG_6606.JPG|4000x2250+0+442
@@ -102,6 +108,7 @@ This is the help for every **keyboard shortcuts**:
 
 ```
 F1 or ?   Show this help
+F2        Share with...
 F11 or F  Toggle fullscreen mode
 +         Zoom in
 -         Zoom out
@@ -130,3 +137,27 @@ a rectangle with a **fixed width/height ratio** (default is
 this screen ratio. If you intend to play the slideshow on a 
 different screen, you can start the program adding a command 
 line option e.g. **--ratio 4x3**.
+
+If you run the program with the **--shuffle** option, images are 
+displayed in random order. You cannot change image playlist 
+position (shifting backward or forward) when you are in shuffle 
+mode.
+
+The **--loop** and **--count** options make sense only with the 
+**--play** option. The first one control how many loop of the 
+playlist are required (default to endless loop), the secondo one 
+tell the program to play only some images from the playlist 
+(default to all).
+
+The **--read-only** option disables the saving (i.e. 
+overwriting) of the playlist file. It may be useful when the 
+program is used for playback only, to avoid accidental changes 
+to the playlist. There is a _cheat mode_ to force saving even in 
+read only mode, read the source code if you are interested.
+
+The **Share With...** function invoked with **F2** key, prompts 
+you for a recipient address. Then it executes the external 
+program defined by the **SHARE_COMMAND** variable, passing to it 
+the image filename and the recipient address as arguments. You 
+can create for example an external script to send the displayed 
+image as an email attachment.
