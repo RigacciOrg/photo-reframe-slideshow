@@ -43,13 +43,15 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
 
-# External command to share an image.
-# Filename and address are passed as arguments.
+# External exiv2 command to edit Orientation and UserComment.
+EXIV2_COMMAND = 'exiv2'
+# External command to share an image, filename and address
+# are passed as arguments.
 SHARE_COMMAND = 'photo-share'
 
 # Command line options defaults.
@@ -224,6 +226,10 @@ class getImageState():
 class photoView(QGraphicsView):
     """ Widget used to displaying the scene, i.e. just the image """
 
+    def __init__(self, scene, app):
+        super(photoView, self).__init__(scene, app)
+        self.mouseWasMoved = False
+
     def wheelEvent(self, event):
         """ Moving the mouse wheel: do zoom and invalidate the geometry flag """
         moose = event.angleDelta().y() / 120
@@ -340,7 +346,8 @@ class photoReframeApp(QMainWindow):
         parser.add_argument('--count', type=int, default=-1, help='for --play mode only: show only COUNT images (default 0: all the images)')
         parser.add_argument('--read-only', action='store_true', help='disable playlist saving/overwriting')
         args = parser.parse_args()
-        args.playlist = args.playlist.decode('utf-8')
+        if sys.version_info[0] < 3:
+            args.playlist = args.playlist.decode('utf-8')
 
         # Determines screen width/height ratio.
         try:
@@ -607,11 +614,11 @@ class photoReframeApp(QMainWindow):
         #print("Exif UserComment tag: %s" % (exif_tag,))
         code_id = exif_tag[0:8].upper()
         content = exif_tag[8:]
-        if code_id.startswith('ASCII'):
+        if code_id.startswith(b'ASCII'):
             user_comment = nullTerminate(content).decode('ascii', 'ignore').rstrip()
-        elif code_id.startswith('JIS'):
+        elif code_id.startswith(b'JIS'):
             user_comment = content.decode('iso2022_jp', 'ignore').rstrip()
-        elif code_id.startswith('UNICODE'):
+        elif code_id.startswith(b'UNICODE'):
             # Guess the byte order. ExifByteOrder tag is not widely used.
             user_comment = utf16_guess_decode(content).rstrip()
         elif code_id.startswith('\0' * 8):
@@ -765,13 +772,14 @@ class photoReframeApp(QMainWindow):
     def helpDialog(self):
         """ Show help message box """
         if self.read_only:
-            read_only_tip = '(disabled)'
+            read_only_tip = ' (disabled)'
         else:
             read_only_tip = ''
         dlg = QMessageBox(self)
         dlg.setWindowTitle(u'%s Help' % (APP_TITLE,))
         msg = u"""F1 or ?\tShow this help
 F2\tShare With...
+F3\tEdit Exif UserComment tag%s
 F11 or F\tToggle fullscreen mode
 +\tZoom in
 -\tZoom out
@@ -794,8 +802,8 @@ End\tGo to the last image
 >\tShift the image forward into the playlist
 C\tToggle display of Exif UserComment
 P\tToggle autoplay
-S\tSave the playlist with updated gemetries %s
-Esc or Q\tQuit program""" % (read_only_tip,)
+S\tSave the playlist with updated gemetries%s
+Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
         dlg.setText(msg)
         dlg.setIcon(QMessageBox.Information)
         dlg.setInformativeText(u'Version: %s\n%s' % (__version__, __copyright__))
@@ -815,7 +823,26 @@ Esc or Q\tQuit program""" % (read_only_tip,)
             try:
                 ret = subprocess.call(cmd)
             except Exception as e:
-                print(u'Subprocess error: %s' % (str(e),))
+                print(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e),))
+
+
+    def userCommentDialog(self):
+        """ Show a dialog to edit the UserComment tag """
+        dlg_title = u'%s - Exif UserComment' % (APP_TITLE,)
+        dlg_msg = u'Modify the Exif UserComment tag:' + u' ' * 60
+        comment, okPressed = QInputDialog.getMultiLineText(self, dlg_title, dlg_msg, self.exif_usercomment)
+        comment = comment.strip()
+        if okPressed and comment != self.exif_usercomment:
+            filename = os.path.join(self.directory, self.current_image)
+            set_cmd = u'set Exif.Photo.UserComment Comment charset=Unicode %s' % (comment)
+            cmd = [EXIV2_COMMAND, '-n', 'UTF-8', '-M', set_cmd, filename]
+            print(u'Executing: %s' % (' '.join(cmd),))
+            try:
+                subprocess.call(cmd)
+                self.exif_usercomment = comment
+                self.showImageCaption()
+            except Exception as e:
+                print(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
 
 
     def keyPressEvent(self, event):
@@ -828,6 +855,10 @@ Esc or Q\tQuit program""" % (read_only_tip,)
         elif event.key() == QtCore.Qt.Key_F2:
             """ Show Share With dialog """
             self.shareDialog()
+        elif event.key() == QtCore.Qt.Key_F3:
+            """ Show Edit UserComment dialog """
+            if not self.read_only:
+                self.userCommentDialog()
         elif event.key() == QtCore.Qt.Key_F11 or event.key() == QtCore.Qt.Key_F:
             """ Toggle fullscreen mode """
             self.toggleFullscreen()
@@ -938,12 +969,12 @@ Esc or Q\tQuit program""" % (read_only_tip,)
             i = 0
         new_tag = EXIF_ORIENTATION_TAGS[i]
         #cmd = ['exiftool', '-Orientation=%d' % (new_tag,), '-n', filename]
-        cmd = ['exiv2', '--Modify', 'set Exif.Image.Orientation %d' % (new_tag,), filename]
+        cmd = [EXIV2_COMMAND, '--Modify', 'set Exif.Image.Orientation %d' % (new_tag,), filename]
         print(u'Executing: %s' % (cmd,))
         try:
             ret = subprocess.call(cmd)
         except Exception as e:
-            print(u'Subprocess error: %s' % (str(e),))
+            print(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
             title = u'Subprocess Error'
             text = u'Error executing external command:\n%s' % ' '.join(cmd)
             self.myMsgBoxDialog(title, QMessageBox.Critical, text, QMessageBox.Ok)
