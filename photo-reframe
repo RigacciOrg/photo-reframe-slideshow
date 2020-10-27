@@ -366,6 +366,8 @@ class photoReframeApp(QMainWindow):
         if os.path.isfile(args.playlist):
             self.playlist = args.playlist
             self.directory = os.path.dirname(self.playlist)
+            if self.directory == '':
+                self.directory = '.'
         elif not os.path.isdir(args.playlist):
             print(u'Path "%s" does not exists' % (args.playlist,))
             sys.exit(EXIT_CODE_ERR)
@@ -638,6 +640,7 @@ class photoReframeApp(QMainWindow):
         self.exif_usercomment = None
         try:
             # Get Exif Orientation from image.
+            # TODO: 'PngImageFile' object has no attribute '_getexif'
             exif_data = Image.open(filename)._getexif()
             if exif_data != None:
                 exif = dict(exif_data.items())
@@ -839,7 +842,10 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
             print(u'Executing: %s' % (' '.join(cmd),))
             try:
                 subprocess.call(cmd)
-                self.exif_usercomment = comment
+                if comment != '':
+                    self.exif_usercomment = comment
+                else:
+                    self.exif_usercomment = None
                 self.showImageCaption()
             except Exception as e:
                 print(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
