@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 photo-reframe -- Slideshow with static pan and zoom of images.
@@ -23,6 +23,7 @@ Press F1 or ? for a list of keyboard shortcuts.
 # For Qt5 doc see: https://doc.qt.io/qt-5/qmainwindow.html
 
 import argparse
+import logging
 import os
 import os.path
 import random
@@ -43,7 +44,9 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.4.5"
+__version__ = "0.5.0"
+
+logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
 
 # Window title
 APP_TITLE = u'Photo Reframe App'
@@ -53,6 +56,8 @@ EXIV2_COMMAND = 'exiv2'
 # External command to share an image, filename and address
 # are passed as arguments.
 SHARE_COMMAND = 'photo-share'
+# External command to get Exif data, etc.
+INFO_COMMAND = 'photo-info'
 
 # Command line options defaults.
 DEFAULT_FRAME_RATIO = '16x9'
@@ -90,7 +95,7 @@ GEOMETRY_FLAG_HIDE = '#000000'     # Border hidden in full-screen
 # Exit read-only mode by pressing CHEAT_REPEAT_KEY_COUNT times "S", then "Y".
 CHEAT_REPEAT_KEY_COUNT = 7         
 
-QLABEL_CSS = """QLabel {
+QLABEL_COMMENT_CSS = """QLabel {
     font: %dpx;
     color: #ffff00;
     font-weight: regular;
@@ -98,19 +103,18 @@ QLABEL_CSS = """QLabel {
     background-color: rgba(0, 0, 0, 0.5);
 }"""
 
-# Verify the Exif keys for Orientation and UserComment tags.
-ORIENTATION_TAG = 274
-USERCOMMENT_TAG = 37510
-if ExifTags.TAGS[ORIENTATION_TAG] != 'Orientation':
-    print(u'ERROR: Exif Orientation tag does not match in PIL library')
-    sys.exit(EXIT_CODE_ERR)
-if ExifTags.TAGS[USERCOMMENT_TAG] != 'UserComment':
-    print(u'ERROR: Exif UserComment tag does not match in PIL library')
-    sys.exit(EXIT_CODE_ERR)
+QLABEL_INFO_CSS = """QLabel {
+    font-size: %dpx;
+    color: #ffff00;
+    font-weight: regular;
+    font-family: "Helvetica";
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 0.25em;
+}"""
+
 
 # Exif Orientation tags handled by this app.
 EXIF_ORIENTATION_TAGS = (1, 3, 6, 8)
-
 # Tag    Row Zero    Column Zero
 # -------------------------------
 # 1      top         left side
@@ -129,8 +133,8 @@ EXIF_ROTATE = { 1: 0, 3: -180, 6: -270, 8: -90 }
 # ------------------------------------------------------------------------
 # Some util functions.
 # ------------------------------------------------------------------------
-def utf16_guess_decode(string):
-    """ Try to guess Little-Endian or Big-Endian encoding, default is LE """
+def utf16_guess_decode(string, hint=None):
+    """ Try to guess Little-Endian or Big-Endian bytes ordering """
 
     try:
         lit_endian = string.decode('utf-16le').strip()
@@ -140,19 +144,31 @@ def utf16_guess_decode(string):
         big_endian = string.decode('utf-16be').strip()
     except:
         big_endian = ''
+
     if lit_endian == '' and big_endian == '':
-        return ''
+        guess = u'I'
+    elif lit_endian != '' and hint == u'I':
+        guess = u'I'
+    elif big_endian != '' and hint == u'M':
+        guess = u'M'
     elif lit_endian == '' or ord(lit_endian[0]) >= 0x4000:
         # If the codepoint of first char is too high, use the other guess.
-        return big_endian
+        guess = u'M'
     else:
+        guess = u'I'
+
+    if guess == u'I':
+        logging.debug(u"Guessed UTF-16 Little-Endian (Intel) bytes ordering")
         return lit_endian
+    else:
+        logging.debug(u"Guessed UTF-16 Big-Endian (Motorola) bytes ordering")
+        return big_endian
 
 
 def nullTerminate(string):
     """ Return the string truncated at the first NULL char """
-
-    i = string.find('\0')
+    # string => Python3: <class 'bytes'>, Python2: <type 'str'>
+    i = string.find(b'\0')
     if i >= 0:
         return string[0:i]
     else:
@@ -163,6 +179,58 @@ def percDiff(int1, int2):
     """ Return the difference percentage between integers int1 and int2 """
     return float(abs(int1 - int2)) / int1
 
+
+def rational_val(r):
+    """ Return a floating point number, given (dividend, divisor) """
+    return float(r[0]) / float(r[1])
+
+
+def get_exif_value(values, namespace, tag, val_type):
+    """ Return an Exif value searching by tag/namespace """
+    try:
+        i = list(namespace.values()).index(tag)
+        k = list(namespace.keys())[i]
+        v = values[k]
+        if val_type == 'dict':
+            return v
+        elif val_type == 'bytes':
+            # Python3: <class 'bytes'>, Python2: <type 'str'>
+            return v
+        elif val_type == 'int':
+            return int(v)
+        elif val_type == 'str':
+            return str(v)
+        elif val_type == 'rational':
+            return rational_val(v)
+        elif val_type == 'dms':
+            return rational_val(v[0]) + rational_val(v[1]) / 60 + rational_val(v[2]) / 3600
+    except:
+        pass
+    return None
+
+
+def exif_byte_order(filename):
+    """ Read some bytes of the Exif data structure """
+    byte_order = None
+    try:
+        with open(filename, 'rb') as f:
+            data_bytes = f.read(16)
+    except:
+        logging.error(u'Reading file header')
+        return byte_order
+    try:
+        if data_bytes[6:12].upper() == b'EXIF\x00\x00':
+            if data_bytes[12:14] == b'II':
+                logging.debug(u'Little-Endian (Intel) Exif data')
+                byte_order = u'I'
+            elif data_bytes[12:14] == b'MM':
+                logging.debug(u'Big-Endian (Motorola) Exif data')
+                byte_order = u'M'
+            else:
+                logging.debug(u'Unknown Byte Order in Exif data')
+    except:
+        logging.error(u'Error reading the Byte Order in file header')
+    return byte_order
 
 # ------------------------------------------------------------------------
 # ------------------------------------------------------------------------
@@ -196,9 +264,9 @@ class getImageState():
             self.geom_y += self.image_height
 
 
-    def fixGeometry(self):
-        """ Fix rounding errors in geometry calculation """
-        print(u'Calculated geometry: %s|%dx%d+%d+%d' % (self.image_name, self.geom_width, self.geom_height, self.geom_x, self.geom_y))
+    def adjustGeometry(self):
+        """ Adjust rounding errors in geometry calculation """
+        logging.debug(u'Calculated geometry: %s|%dx%d+%d+%d' % (self.image_name, self.geom_width, self.geom_height, self.geom_x, self.geom_y))
         if self.geom_x < 0:
             self.geom_x = 0
         if self.geom_y < 0:
@@ -206,19 +274,19 @@ class getImageState():
         # For small (< 1%) differencies use image size instead of selected geometry.
         diff = percDiff(self.geom_width, self.image_width)
         if diff > 0 and diff < 0.01:
-            print("geom_width = %d, image_width = %d: using the second one" % (self.geom_width, self.image_width))
+            logging.debug("geom_width = %d, image_width = %d: using the second one" % (self.geom_width, self.image_width))
             self.geom_width = self.image_width
         diff = percDiff(self.geom_height, self.image_height)
         if diff > 0 and diff < 0.01:
-            print("geom_height = %d, image_height = %d: using the second one" % (self.geom_height, self.image_height))
+            logging.debug("geom_height = %d, image_height = %d: using the second one" % (self.geom_height, self.image_height))
             self.geom_height = self.image_height
         # Force aspect ratio, but warn if corrected.
         proper_height = int(float(self.geom_width) / self.frame_ratio_width * self.frame_ratio_height)
         diff = percDiff(self.geom_height, proper_height)
         if diff > 0 and diff < 0.01:
-            print(u'geom_height = %d, using %d to respect ratio' % (self.geom_height, proper_height))
+            logging.debug(u'geom_height = %d, using %d to respect ratio' % (self.geom_height, proper_height))
             self.geom_height = proper_height
-        print(u'Fixed geometry: %s|%dx%d+%d+%d' % (self.image_name, self.geom_width, self.geom_height, self.geom_x, self.geom_y))
+        logging.info(u'Adjusted geometry: %s|%dx%d+%d+%d' % (self.image_name, self.geom_width, self.geom_height, self.geom_x, self.geom_y))
 
 
 # ------------------------------------------------------------------------
@@ -322,7 +390,10 @@ class photoReframeApp(QMainWindow):
         self.current_image = None         # Filename (no path) of currently displayed image.
         self.exif_orientation_tag = None  # Image's Exif Orientation tag (see EXIF_ROTATE dictionary).
         self.exif_usercomment = None      # Image subtitle from Exif UserComment.
+        self.exif_info = None             # Image info extracted from Exif data.
+        self.exif_byte_order = None       # 'I': Little-Endian (Intel), 'M': Big-Endian (Motorola)
         self.caption_display = True       # Toggle display of Exif UserComment.
+        self.info_display = False         # Toggle display of Exif.* tags.
         self.image_rotate = None          # Rotation (in degrees) imposed by exif_orientation_tag.
         self.image_width = None           # Width in pixels of current image, Exif rotation applied.
         self.image_height = None          # Height in pixels of current image, Exif rotation applied.
@@ -356,7 +427,7 @@ class photoReframeApp(QMainWindow):
             self.frame_ratio_height = float(h)
             self.frame_ratio = self.frame_ratio_width / self.frame_ratio_height
         except:
-            print(u'Error in screen ratio, using default "%s"' % (DEFAULT_FRAME_RATIO,))
+            logging.error(u'Error in screen ratio, using default "%s"' % (DEFAULT_FRAME_RATIO,))
             w, h = DEFAULT_FRAME_RATIO.split('x')
             self.frame_ratio_width = float(w)
             self.frame_ratio_height = float(h)
@@ -369,7 +440,7 @@ class photoReframeApp(QMainWindow):
             if self.directory == '':
                 self.directory = '.'
         elif not os.path.isdir(args.playlist):
-            print(u'Path "%s" does not exists' % (args.playlist,))
+            logging.error(u'Path "%s" does not exists' % (args.playlist,))
             sys.exit(EXIT_CODE_ERR)
         else:
             # The passed argument is a directory.
@@ -384,7 +455,7 @@ class photoReframeApp(QMainWindow):
                 self.playlist = p2
             else:
                 self.playlist = p1
-        print(u'Using playlist "%s" from directory "%s"' % (os.path.basename(self.playlist), self.directory,))
+        logging.info(u'Using playlist "%s" from directory "%s"' % (os.path.basename(self.playlist), self.directory,))
 
         # Handle the other command line paramteres.
         self.shuffle = args.shuffle
@@ -401,7 +472,7 @@ class photoReframeApp(QMainWindow):
         self.readPlaylist()
         self.scanDirectory()
         if len(self.images_playlist) < 1:
-            print(u'No images found in "%s"' % (self.directory,))
+            logging.error(u'No images found in "%s"' % (self.directory,))
             sys.exit(EXIT_CODE_ERR)
         if self.shuffle:
             random.shuffle(self.images_playlist)
@@ -411,7 +482,7 @@ class photoReframeApp(QMainWindow):
         # Place the window into the screen.
         screen_width = app.desktop().availableGeometry().width()
         screen_height = app.desktop().availableGeometry().height()
-        print(u'Screen resolution: %dx%d' % (screen_width, screen_height))
+        logging.debug(u'Screen resolution: %dx%d' % (screen_width, screen_height))
         # Geometry (size and position) of the QMainWindow widget, excluding any window frame.
         self.window_pos_x = int(screen_width * WIN_X)  # Consider the window left border.
         self.window_pos_y = int(screen_height * WIN_Y)  # Consider the window titlebar and top border.
@@ -419,7 +490,7 @@ class photoReframeApp(QMainWindow):
         self.window_height = int(screen_height * WIN_HEIGHT)  # Consider the window top/bottom borders, titlebar and desktop bottom panel.
         # Set size (excluding any window frame) and position of the QMainWindow widget.
         self.setGeometry(self.window_pos_x, self.window_pos_y, self.window_width, self.window_height)
-        print(u'Setting QMainWindow widget geometry %dx%d+%d+%d' % (self.window_width, self.window_height, self.window_pos_x, self.window_pos_y))
+        logging.debug(u'Setting QMainWindow widget geometry %dx%d+%d+%d' % (self.window_width, self.window_height, self.window_pos_x, self.window_pos_y))
 
         # Load a blank image into a QPixmap Class.
         self.image = QPixmap(640, 480)
@@ -438,6 +509,7 @@ class photoReframeApp(QMainWindow):
         view_width, view_height = self.calculateImageViewSize()
         self.view.resize(view_width, view_height)
         self.caption_label = QLabel(self)
+        self.imginfo_label = QLabel(self)
         # Go fullscreen if requested.
         if args.fullscreen:
             self.toggleFullscreen()
@@ -468,12 +540,46 @@ class photoReframeApp(QMainWindow):
         label_pad_y = int(font_px * 0.10)
         label_margin_bottom = int(font_px * 0.50)
         self.caption_label.setText(self.exif_usercomment)
-        self.caption_label.setStyleSheet(QLABEL_CSS % (font_px,))
+        self.caption_label.setStyleSheet(QLABEL_COMMENT_CSS % (font_px,))
         self.caption_label.setAlignment(QtCore.Qt.AlignCenter)
         label_w = self.caption_label.sizeHint().width() + label_pad_x * 2
         label_h = self.caption_label.sizeHint().height() + label_pad_y * 2
         self.caption_label.resize(label_w, label_h)
         self.caption_label.move(pad_x + (width - label_w) / 2, (height - label_h + pad_y - label_margin_bottom))
+
+
+    def showImageInfo(self):
+        """ Show Exif.Photo data as picture overlay """
+
+        if self.info_display is False or self.exif_info is None:
+            self.imginfo_label.resize(0, 0)
+            return
+        self.spitWindowSizes()
+        self.spitImageStatus()
+        cmd = [INFO_COMMAND, os.path.join(self.directory, self.current_image)]
+        logging.info(u'Executing: %s' % (' '.join(cmd),))
+        try:
+            info = subprocess.check_output(cmd).decode('utf-8').strip()
+        except Exception as e:
+            logging.error(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e),))
+            info = None
+        if info == None or info == '':
+            self.imginfo_label.resize(0, 0)
+            return
+        print(u'\n=== %s ===' % (INFO_COMMAND,))
+        print(info)
+        print('')
+        width, height = self.calculateImageViewSize()
+        pad_x, pad_y = self.calculateImageViewPadding()
+        font_px = int(width * 0.02)
+        label_x = int(height * 0.01)
+        label_y = int(height * 0.01)
+        self.imginfo_label.setText(info)
+        self.imginfo_label.setStyleSheet(QLABEL_INFO_CSS % (font_px,))
+        label_w = self.imginfo_label.sizeHint().width()
+        label_h = self.imginfo_label.sizeHint().height()
+        self.imginfo_label.resize(label_w, label_h)
+        self.imginfo_label.move(pad_x + label_x, pad_y + label_y)
 
 
     def readPlaylist(self):
@@ -486,7 +592,7 @@ class photoReframeApp(QMainWindow):
                     if '|' in line:
                         img_name, img_geometry = line.split('|')
                         if not re.match(GEOMETRY_RE, img_geometry):
-                            print(u'WARNING: Invalid geometry for image "%s"' % (img_name,))
+                            logging.warning(u'Invalid geometry for image "%s"' % (img_name,))
                             img_geometry = None
                     else:
                         img_name, img_geometry = line, None
@@ -496,8 +602,8 @@ class photoReframeApp(QMainWindow):
                         self.image_names[new_index] = img_name
                         self.image_geometries[new_index] = img_geometry
                     else:
-                        print(u'WARNING: Image in playlist does not exists: "%s"' % (img_name,))
-        print(u'Read file "%s": %d images' % (self.playlist, len(self.images_playlist)))
+                        logging.warning(u'Image in playlist does not exists: "%s"' % (img_name,))
+        logging.info(u'Read file "%s": %d images' % (self.playlist, len(self.images_playlist)))
 
 
     def scanDirectory(self):
@@ -515,7 +621,7 @@ class photoReframeApp(QMainWindow):
                         self.images_playlist.append(new_index)
                         self.image_names[new_index] = f
                         self.image_geometries[new_index] = None
-        print(u'Merged images from "%s": total %d images' % (self.directory, len(self.images_playlist)))
+        logging.info(u'Merged images from "%s": total %d images' % (self.directory, len(self.images_playlist)))
 
 
     def nextImage(self, direction=1):
@@ -545,15 +651,15 @@ class photoReframeApp(QMainWindow):
                 else:
                     skipped += 1
                     if skipped >= len(self.images_playlist):
-                        print(u'Slideshow is running, but no images with geometry found')
+                        logging.warning(u'Slideshow is running, but no images with geometry found')
                         self.toggleAutoplay()
                         skip_this_image = False
 
-        print(u'\nCurrent image = "%s"' % (self.current_image,))
+        logging.info(u'Current image = "%s"' % (self.current_image,))
         filename = os.path.join(self.directory, self.current_image)
         self.getExifTag(filename)
         self.image_rotate = EXIF_ROTATE[self.exif_orientation_tag]
-        print(u'Exif Orientation tag = %s' % (self.exif_orientation_tag,))
+        logging.debug(u'Exif Orientation tag = %s' % (self.exif_orientation_tag,))
 
         # Reset transformation and load the new image into the view.
         self.view.resetTransform()
@@ -562,7 +668,7 @@ class photoReframeApp(QMainWindow):
             if self.image.isNull():
                 raise OSError('QPixmap image isNull()')
         except Exception as e:
-            print(u'Error loading image "%s": %s' % (filename, str(e)))
+            logging.error(u'Error loading image "%s": %s' % (filename, str(e)))
             self.image = QPixmap(4000, 3000)
             self.image.fill(QColor("#7c7c7c"))
             self.current_geometry = None
@@ -581,14 +687,15 @@ class photoReframeApp(QMainWindow):
             self.image_width, self.image_height = self.image.size().height(), self.image.size().width()
         # Show image at existing geometry or at full height.
         if self.current_geometry is not None:
-            print(u'A geometry is defined for "%s"' % (self.current_image,))
+            logging.debug(u'A geometry is defined for "%s"' % (self.current_image,))
             self.zoomToGeometry()
         else:
-            print(u'No geometry defined for "%s"' % (self.current_image,))
+            logging.debug(u'No geometry defined for "%s"' % (self.current_image,))
             self.zoom = 1.0
             self.fitImageHeight(fullHeight=True)
         self.showGeometryFlag()
         self.showImageCaption()
+        self.showImageInfo()
         if self.timer.isActive():
             if self.limit_slides > 0:
                 self.slide_counter += 1
@@ -613,20 +720,31 @@ class photoReframeApp(QMainWindow):
     def decodeExifUserComment(self, exif_tag):
         """ Get the string from an Exif UserComment tag, with proper decoding """
 
-        #print("Exif UserComment tag: %s" % (exif_tag,))
-        code_id = exif_tag[0:8].upper()
-        content = exif_tag[8:]
+        #print("type(UserComment) = %s" % (type(exif_tag)))
+        # Python3: <class 'bytes'>
+        # Python2: <type 'str'>
+        #print("Exif tag", exif_tag)
+        try:
+            code_id = exif_tag[0:8].upper()
+            content = exif_tag[8:]
+        except:
+            return None
         if code_id.startswith(b'ASCII'):
+            logging.debug(u'UserComment char code: ITU-T T.50 IA5 (ASCII)')
             user_comment = nullTerminate(content).decode('ascii', 'ignore').rstrip()
         elif code_id.startswith(b'JIS'):
-            user_comment = content.decode('iso2022_jp', 'ignore').rstrip()
+            logging.debug(u'UserComment char code: JIS X208-1990')
+            user_comment = nullTerminate(content).decode('shift_jis', 'ignore').rstrip()
         elif code_id.startswith(b'UNICODE'):
-            # Guess the byte order. ExifByteOrder tag is not widely used.
+            # Unicode is UCS-2 (16bit) in Exif, guess the byte order.
+            logging.debug(u'UserComment char code: Unicode')
             user_comment = utf16_guess_decode(content).rstrip()
-        elif code_id.startswith('\0' * 8):
-            user_comment = nullTerminate(content.decode('utf-8', 'ignore')).rstrip()
+        elif code_id.startswith(b'\0' * 8):
+            logging.debug(u"UserComment char code: Undefined ('\\0' * 8); assuming UTF-8")
+            user_comment = nullTerminate(content).decode('utf-8', 'ignore').rstrip()
         else:
-            user_comment = nullTerminate(exif_tag.decode('utf-8', 'ignore')).strip()
+            logging.debug(u'UserComment char code: Unknown; assuming UTF-8')
+            user_comment = nullTerminate(exif_tag).decode('utf-8', 'ignore').strip()
         if len(user_comment) == 0:
             user_comment = None
         return user_comment
@@ -638,20 +756,21 @@ class photoReframeApp(QMainWindow):
         # Assume Exif Orientation tag = 1, if missing.
         self.exif_orientation_tag = 1
         self.exif_usercomment = None
+        self.exif_info = []
+        self.exif_info.append('Filename: %s' % (os.path.basename(filename),))
+        self.exif_byte_order = exif_byte_order(filename)
         try:
             # Get Exif Orientation from image.
             # TODO: 'PngImageFile' object has no attribute '_getexif'
             exif_data = Image.open(filename)._getexif()
             if exif_data != None:
-                exif = dict(exif_data.items())
-                if ORIENTATION_TAG in exif.keys():
-                    self.exif_orientation_tag = int(exif[ORIENTATION_TAG])
-                if USERCOMMENT_TAG in exif.keys():
-                    self.exif_usercomment = self.decodeExifUserComment(exif[USERCOMMENT_TAG])
+                self.exif_orientation_tag = get_exif_value(exif_data, ExifTags.TAGS, 'Orientation', 'int')
+                comment = get_exif_value(exif_data, ExifTags.TAGS, 'UserComment', 'bytes')
+                self.exif_usercomment = self.decodeExifUserComment(comment)
         except Exception as e:
-            print(u'Error getting Exif data from image "%s": %s' % (os.path.basename(filename), str(e)))
+            logging.error(u'Error getting Exif data from image "%s": %s' % (os.path.basename(filename), str(e)))
         if self.exif_orientation_tag not in EXIF_ORIENTATION_TAGS:
-            print(u'Invalid Exif Orientation tag: %s, assuming 1' % (self.exif_orientation_tag,))
+            logging.warning(u'Invalid Exif Orientation tag: %s, assuming 1' % (self.exif_orientation_tag,))
             self.exif_orientation_tag = 1
 
 
@@ -668,6 +787,7 @@ class photoReframeApp(QMainWindow):
         print(u'Zoom = %s' % (self.zoom,))
         print(u'horizontalScrollBar() = %s' % (s.horizontal_scroll,))
         print(u'verticalScrollBar() = %s' % (s.vertical_scroll,))
+        print('')
 
 
     def spitWindowSizes(self):
@@ -696,6 +816,7 @@ class photoReframeApp(QMainWindow):
 
         # QGraphicsView.size() is the size of the image view.
         print(u'View size: QGraphicsView.size(): %dx%d' % (self.view.size().width(), self.view.size().height()))
+        print('')
 
 
     def resizeEvent(self, resizeEvent):
@@ -706,6 +827,7 @@ class photoReframeApp(QMainWindow):
         padding_x, padding_y = self.calculateImageViewPadding()
         self.view.move(padding_x, padding_y)
         self.showImageCaption()
+        self.showImageInfo()
         if self.current_image is not None:
             self.zoomToGeometry()
 
@@ -822,11 +944,11 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
         recipient, okPressed = QInputDialog.getText(self, dlg_title, dlg_msg, QLineEdit.Normal, '')
         if okPressed and recipient != '':
             cmd = [SHARE_COMMAND, os.path.join(self.directory, self.current_image), recipient]
-            print(u'Executing: %s' % (' '.join(cmd),))
+            logging.info(u'Executing: %s' % (' '.join(cmd),))
             try:
                 ret = subprocess.call(cmd)
             except Exception as e:
-                print(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e),))
+                logging.error(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e),))
 
 
     def userCommentDialog(self):
@@ -839,7 +961,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
             filename = os.path.join(self.directory, self.current_image)
             set_cmd = u'set Exif.Photo.UserComment Comment charset=Unicode %s' % (comment)
             cmd = [EXIV2_COMMAND, '-n', 'UTF-8', '-M', set_cmd, filename]
-            print(u'Executing: %s' % (' '.join(cmd),))
+            logging.info(u'Executing: %s' % (' '.join(cmd),))
             try:
                 subprocess.call(cmd)
                 if comment != '':
@@ -848,7 +970,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
                     self.exif_usercomment = None
                 self.showImageCaption()
             except Exception as e:
-                print(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
+                logging.error(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
 
 
     def keyPressEvent(self, event):
@@ -891,10 +1013,9 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
             """ Rotate the image by 90 degrees """
             self.imageRotate()
         elif event.key() == QtCore.Qt.Key_I:
-            """ Print image status data """
-            # TODO: Show a pop-up with data.
-            self.spitWindowSizes()
-            self.spitImageStatus()
+            """ Print image info and window status data """
+            self.info_display = not self.info_display
+            self.showImageInfo()
         elif event.key() == QtCore.Qt.Key_Return or event.key() == QtCore.Qt.Key_Enter:
             """ Use current geometry for image """
             self.spitImageStatus()
@@ -930,7 +1051,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
             if self.read_only:
                 if self.force_save_cheat == CHEAT_REPEAT_KEY_COUNT:
                     self.read_only = False
-                    print(u'Read-only mode disabled!')
+                    logging.warning(u'Read-only mode disabled!')
                 else:
                     self.force_save_cheat = 0
         elif event.key() == QtCore.Qt.Key_Less:
@@ -968,7 +1089,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
 
     def imageRotate(self):
         """ Update image cycling Exif Orientation tag """
-        print(u'Current Exif Orientation tag = %s' % (self.exif_orientation_tag,))
+        logging.info(u'Current Exif Orientation tag = %s' % (self.exif_orientation_tag,))
         filename = os.path.join(self.directory, self.current_image)
         i = EXIF_ORIENTATION_TAGS.index(self.exif_orientation_tag)  + 1
         if i >= len(EXIF_ORIENTATION_TAGS):
@@ -976,11 +1097,11 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
         new_tag = EXIF_ORIENTATION_TAGS[i]
         #cmd = ['exiftool', '-Orientation=%d' % (new_tag,), '-n', filename]
         cmd = [EXIV2_COMMAND, '--Modify', 'set Exif.Image.Orientation %d' % (new_tag,), filename]
-        print(u'Executing: %s' % (cmd,))
+        logging.info(u'Executing: %s' % (cmd,))
         try:
             ret = subprocess.call(cmd)
         except Exception as e:
-            print(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
+            logging.error(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
             title = u'Subprocess Error'
             text = u'Error executing external command:\n%s' % ' '.join(cmd)
             self.myMsgBoxDialog(title, QMessageBox.Critical, text, QMessageBox.Ok)
@@ -1058,7 +1179,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
 
     def zoomToGeometry(self):
         """ Re-calculate zoom and pan upon image geometry and view size """
-        print(u'Restoring geometry view for "%s": %s' % (self.current_image, self.current_geometry))
+        logging.info(u'Restoring geometry view for "%s": %s' % (self.current_image, self.current_geometry))
         if self.current_geometry is not None:
             view_width, view_height = self.calculateImageViewSize()
             w, h, x, y = self.current_geometry.replace('x', '+').split('+')
@@ -1072,7 +1193,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
     def updateImageGeometry(self):
         """ Update geometry{} for current image """
         s = getImageState(self)
-        s.fixGeometry()
+        s.adjustGeometry()
         self.current_geometry = '%dx%d+%d+%d' % (s.geom_width, s.geom_height, s.geom_x, s.geom_y)
         self.image_geometries[self.current_index] = self.current_geometry
         self.playlist_changed = True
@@ -1082,7 +1203,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
     def deleteImageGeometry(self):
         """ Delete current image's entry from geometry{} """
         if self.current_geometry is not None:
-            print(u'Deleting geometry for "%s"' % (self.current_image,))
+            logging.info(u'Deleting geometry for "%s"' % (self.current_image,))
             self.current_geometry = None
             self.image_geometries[self.current_index] = None
             self.playlist_changed = True
@@ -1116,7 +1237,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
     def shiftBackward(self):
         """ Shift the current image one position backward into the playlist """
         if self.shuffle:
-            print("Cannot shift image position in shuffle mode.")
+            logging.warning(u'Cannot shift image position in shuffle mode')
             return
         if len(self.images_playlist) >= 2:
             self.swapImages(self.images_playlist[0], self.images_playlist[-1])
@@ -1127,7 +1248,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
     def shiftForward(self):
         """ Shift the current image one position forward into the playlist """
         if self.shuffle:
-            print("Cannot shift image position in shuffle mode.")
+            logging.warning(u'Cannot shift image position in shuffle mode')
             return
         if len(self.images_playlist) >= 2:
             self.swapImages(self.images_playlist[0], self.images_playlist[1])
@@ -1136,7 +1257,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
 
     def savePlaylist(self):
         """ Save a new playlist file, with updated images geometries """
-        print(u'Saving updated playlist "%s"' % (self.playlist,))
+        logging.info(u'Saving updated playlist "%s"' % (self.playlist,))
         try:
             with open(self.playlist, 'w') as f:
                 f.write('#EXTM3U-PHOTO-REFRAME\n')
@@ -1149,7 +1270,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
                         f.write('%s|\n' % (self.image_names[i],))
             self.playlist_changed = False
         except Exception as e:
-            print(u'Error saving playlist: %s' % (str(e),))
+            logging.error(u'Error saving playlist: %s' % (str(e),))
 
 
     def toggleFullscreen(self):
@@ -1163,12 +1284,12 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
 
     def toggleAutoplay(self):
         if self.timer.isActive():
-            print(u'Stopping autoplay')
+            logging.info(u'Stopping autoplay')
             self.limit_loops = 0
             self.limit_slides = 0
             self.timer.stop()
         else:
-            print(u'Starting autoplay')
+            logging.info(u'Starting autoplay')
             self.timer.start(self.slide_time * 1000)
 
 
