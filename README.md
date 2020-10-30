@@ -48,10 +48,14 @@ photo-reframe --fullscreen --play path/to/directory/
 
 The program receives the name of a **directory** (or a 
 **playlist**) from the command line and it will search images 
-starting from that location.
+starting from that location. Some filenames are considered 
+reserved, and thus ignored during the search; the list of 
+reserved names is hard coded into the source code (see the 
+**IGNORE\_FILES** definition) and it defaults to just the 
+**folder.jpg** name.
 
 The default, preferred name for the playlist is 
-"playlist_16x9.m3u" (or whatever is the screen width/height 
+"playlist\_16x9.m3u" (or whatever is the screen width/height 
 ratio imposed by the command line option). A fallback default is 
 "playlist.m3u".
 
