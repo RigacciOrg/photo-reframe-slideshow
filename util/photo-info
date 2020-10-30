@@ -1,0 +1,222 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+"""
+photo-info -- Print selected Exif tags for an image.
+
+Read the Exif tags from an image using the external exiv2
+tool, then print only a selection of them. Some generic
+Exif tags are replaced by custom ones, e.g.
+Exif.Photo.ExposureProgram is replaced by the more specific
+Exif.OlympusCs.ExposureMode, if it exists.
+"""
+
+from __future__ import print_function
+import os
+import os.path
+import re
+import subprocess
+import sys
+
+__author__ = "Niccolo Rigacci"
+__copyright__ = "Copyright 2020 Niccolo Rigacci <niccolo@rigacci.org>"
+__license__ = "GPLv3-or-later"
+__email__ = "niccolo@rigacci.org"
+__version__ = "0.1.1"
+
+# Print some debugging info.
+DEBUG = False
+
+# Print both generic and specific Exif tags.
+PRINT_ALL_ALTERNATIVES = False
+
+# List of tags that are parsed from the exiv2 output.
+EXIF_TAGS = [
+    u'Exif.Image.DateTime',
+    u'Exif.Image.Model',
+    u'Exif.Photo.PixelXDimension',
+    u'Exif.Photo.PixelYDimension',
+    u'Exif.Photo.ExposureTime',
+    u'Exif.Photo.FNumber',
+    u'Exif.Photo.ExposureProgram',
+    u'Exif.Photo.ISOSpeedRatings',
+    u'Exif.Photo.DateTimeOriginal',
+    u'Exif.Photo.DateTimeDigitized',
+    u'Exif.Photo.ExposureMode',
+    u'Exif.Photo.ExposureBiasValue',
+    u'Exif.Photo.MeteringMode',
+    u'Exif.Photo.Flash',
+    u'Exif.Photo.FocalLength',
+    u'Exif.Photo.SubjectDistance',
+    u'Exif.OlympusCs.ExposureMode',
+    u'Exif.OlympusCs.MeteringMode',
+    u'Exif.OlympusCs.FocusMode',
+    u'Exif.OlympusFi.FocusDistance',
+    u'Exif.OlympusCs.FlashMode',
+    u'Exif.CanonCs.ExposureProgram',
+    u'Exif.CanonCs.MeteringMode',
+    u'Exif.CanonSi.SubjectDistance',
+    u'Exif.CanonCs.FlashMode',
+    u'Exif.GPSInfo.GPSLatitudeRef',
+    u'Exif.GPSInfo.GPSLatitude',
+    u'Exif.GPSInfo.GPSLongitudeRef',
+    u'Exif.GPSInfo.GPSLongitude'
+]
+
+# Tags that are printed, with separators.
+PRINT_TAGS = [
+    u'Exif.Filename',               # Fake
+    u'Exif.Photo.PixelDimensions',  # Fake
+    u'Exif.Image.Model',
+    u'Exif.Photo.DateTimeOriginal',
+    u'',
+    u'Exif.Photo.ISOSpeedRatings',
+    u'Exif.Photo.FNumber',
+    u'Exif.Photo.ExposureTime',
+    u'',
+    u'Exif.Photo.ExposureProgram',
+    u'Exif.Photo.ExposureMode',
+    u'Exif.Photo.ExposureBiasValue',
+    u'Exif.Photo.MeteringMode',
+    u'Exif.Photo.Flash',
+    u'',
+    u'Exif.Photo.FocalLength',
+    u'Exif.Photo.SubjectDistance',
+    u'Exif.OlympusCs.FocusMode',
+    u'',
+    u'Exif.GPSInfo.GPSLatitude',
+    u'Exif.GPSInfo.GPSLongitude'
+]
+
+# For some generic tags, there may be a more specific alternative.
+ALTERNATIVES = {
+    u'Exif.Photo.DateTimeOriginal': {
+        1: u'Exif.Photo.DateTimeOriginal',
+        2: u'Exif.Photo.DateTimeDigitized',
+        3: u'Exif.Image.DateTime' },
+    u'Exif.Photo.MeteringMode': {
+        1: u'Exif.OlympusCs.MeteringMode',
+        2: u'Exif.CanonCs.MeteringMode' },
+    u'Exif.Photo.ExposureProgram': {
+        1: u'Exif.OlympusCs.ExposureMode',
+        2: u'Exif.CanonCs.ExposureProgram' },
+    u'Exif.Photo.SubjectDistance': {
+        1: u'Exif.OlympusFi.FocusDistance',
+        2: u'Exif.CanonSi.SubjectDistance' },
+    u'Exif.Photo.Flash': {
+        1: u'Exif.OlympusCs.FlashMode',
+        2: u'Exif.CanonCs.FlashMode' }
+}
+
+
+#---------------------------------------------------------------
+#---------------------------------------------------------------
+def parse_dms(dms):
+    """ Convert degrees, minutes and sconds to decimal degrees """
+    # Examples: "41.1264568deg", "43deg 51' 29.973""
+    dms = dms.strip()
+    dd = 0.0
+    try:
+        for part in dms.split(None, 2):
+            if part.endswith(u'deg'):
+                dd += float(re.sub(u'[^\d\.]', '', part))
+            elif part.endswith(u"'"):
+                dd += float(re.sub(u'[^\d\.]', '', part)) / 60
+            elif part.endswith(u'"'):
+                dd += float(re.sub(u'[^\d\.]', '', part)) / 3600
+            else:
+                dd += float(part)
+        return dd
+    except Exception as e:
+        print(u'parse_dms("%s"): %s' % (dms, e.__repr__()), file=sys.stderr)
+        return None
+
+
+#---------------------------------------------------------------
+# Execute the exiv2 program and parse stdout.
+#---------------------------------------------------------------
+def print_info(filename):
+    tags_found = {u'Exif.Filename': os.path.basename(filename)}
+    cmd = ['exiv2', 'print', '-u', '-p', 'a', filename]
+    subproc = subprocess.Popen(cmd, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, stderr = subproc.communicate()
+    retcode = subproc.returncode
+    for line in output.splitlines():
+        field = line.split(None, 3)
+        if len(field) >= 4:
+            tag = field[0].decode('utf-8', errors='ignore')
+            val = field[3].decode('utf-8', errors='ignore')
+            if tag in EXIF_TAGS:
+                if val != None and val != '':
+                    tags_found[tag] = val
+
+    # Handle cases not parsed by the Exiv2 library.
+    #-----------------------------------------------------------
+    # Exif.CanonSi.SubjectDistance
+    tag = u'Exif.CanonSi.SubjectDistance'
+    if tag in tags_found:
+        distance = tags_found[tag]
+        if re.match(u'^\d+$', distance) == None:
+            return distance
+        else:
+            distance = int(distance)
+            if distance == 6553:
+                tags_found[tag] = u'Infinity'
+            elif distance < 100:
+                tags_found[tag] = u'%d cm' % (distance)
+            else:
+                tags_found[tag] = u'%.2f m' % (float(distance) / 100.0)
+    # Convert GPSInfo data from DMS to decimal degrees.
+    lat = u'Exif.GPSInfo.GPSLatitude'
+    lon = u'Exif.GPSInfo.GPSLongitude'
+    lar = u'Exif.GPSInfo.GPSLatitudeRef'
+    lor = u'Exif.GPSInfo.GPSLongitudeRef'
+    if lat in tags_found and lon in tags_found and lar in tags_found and lor in tags_found:
+        dd_lat = parse_dms(tags_found[lat])
+        dd_lon = parse_dms(tags_found[lon])
+        if dd_lat != None and dd_lon != None:
+            tags_found[lat] = "%.8f %s" % (dd_lat, tags_found[lar])
+            tags_found[lon] = "%.8f %s" % (dd_lon, tags_found[lor])
+        else:
+            tags_found[lat] = "Error"
+            tags_found[lon] = "Error"
+    # Convert dimensions into width x height format.
+    xdim = u'Exif.Photo.PixelXDimension'
+    ydim = u'Exif.Photo.PixelYDimension'
+    if xdim in tags_found and ydim in tags_found:
+        # Exif.Photo.PixelDimensions does not exists as Exif tag.
+        tags_found[u'Exif.Photo.PixelDimensions'] = "%d x %d" % (int(tags_found[xdim]), int(tags_found[ydim]))
+
+    # Print Exif tags.
+    #-----------------------------------------------------------
+    print_separator = False
+    for tag in PRINT_TAGS:
+        if tag == u'':
+            print_separator = True
+            continue
+        # Search for alternatives to standard tags (usually in MakerNote).
+        if tag in ALTERNATIVES:
+            alt = ALTERNATIVES[tag]
+            if DEBUG: print(u"Searching alternatives for %s:" % (tag,))
+            for i in sorted(alt):
+                if DEBUG: print(u"  %2d: %s" % (i, alt[i]))
+                if alt[i] in tags_found:
+                    if PRINT_ALL_ALTERNATIVES and alt[i] != tag and tag in tags_found:
+                        if print_separator:
+                            print(u'')
+                            print_separator = False
+                        print("%s: %s" % (tag[5:], tags_found[tag]))
+                    tag = alt[i]
+                    break
+        if tag in tags_found:
+            if print_separator:
+               print(u'')
+               print_separator = False
+            print("%s: %s" % (tag[5:], tags_found[tag]))
+    return
+
+
+#---------------------------------------------------------------
+# Main loop.
+#---------------------------------------------------------------
+for i in range(1, len(sys.argv)):
+    print_info(sys.argv[i])
