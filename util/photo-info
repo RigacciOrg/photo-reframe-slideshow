@@ -55,6 +55,8 @@ EXIF_TAGS = [
     u'Exif.CanonCs.ExposureProgram',
     u'Exif.CanonCs.MeteringMode',
     u'Exif.CanonSi.SubjectDistance',
+    u'Exif.CanonSi.0x0014',
+    u'Exif.CanonCs.AFPoint',
     u'Exif.CanonCs.FlashMode',
     u'Exif.GPSInfo.GPSLatitudeRef',
     u'Exif.GPSInfo.GPSLatitude',
@@ -81,7 +83,9 @@ PRINT_TAGS = [
     u'',
     u'Exif.Photo.FocalLength',
     u'Exif.Photo.SubjectDistance',
+    u'Exif.CanonSi.0x0014',
     u'Exif.OlympusCs.FocusMode',
+    u'Exif.CanonCs.AFPoint',
     u'',
     u'Exif.GPSInfo.GPSLatitude',
     u'Exif.GPSInfo.GPSLongitude'
@@ -107,12 +111,59 @@ ALTERNATIVES = {
         2: u'Exif.CanonCs.FlashMode' }
 }
 
+# Rename some tags when printing, specially unknown ones.
+ALIASES = {
+    u'Exif.CanonSi.0x0014': u'Exif.CanonSi.FocusDistanceLower'
+}
+
 
 #---------------------------------------------------------------
 #---------------------------------------------------------------
+def print_tag(tagname, value):
+    if tagname in ALIASES:
+        tagname = ALIASES[tagname]
+    if tagname.startswith(u'Exiv.'):
+        tagname = tagname[5:]
+    print(u'%s: %s' % (tagname, value))
+
+
+#---------------------------------------------------------------
+# Convert Canon focus distance into human-readable format.
+#---------------------------------------------------------------
+def parse_canon_distance(distance):
+    if re.match(u'^\d+$', distance) == None:
+        return distance
+    else:
+        distance = int(distance)
+        if distance == 6553:
+            return u'Infinity'
+        elif distance < 100:
+            return u'%d cm' % (distance)
+        else:
+            return u'%.2f m' % (float(distance) / 100.0)
+
+
+#---------------------------------------------------------------
+# Missing/misleading Exif.CanonCs.AFPoint tag 0x13 values.
+# Chacked on a Canon PowerShot S120.
+#---------------------------------------------------------------
+def parse_canon_afpoint(tag_value):
+    canonCsAfPoint = {
+        '(0)':                       u'None',
+        '(16390)':                   u'Face AiAF',
+        'Manual AF point selection': u'1-point'
+    }
+    if tag_value in canonCsAfPoint:
+        return canonCsAfPoint[tag_value]
+    else:
+        return tag_value
+
+
+#---------------------------------------------------------------
+# Convert "41.1264568deg" or "43deg 51' 29.973" into float.
+#---------------------------------------------------------------
 def parse_dms(dms):
     """ Convert degrees, minutes and sconds to decimal degrees """
-    # Examples: "41.1264568deg", "43deg 51' 29.973""
     dms = dms.strip()
     dd = 0.0
     try:
@@ -154,17 +205,15 @@ def print_info(filename):
     # Exif.CanonSi.SubjectDistance
     tag = u'Exif.CanonSi.SubjectDistance'
     if tag in tags_found:
-        distance = tags_found[tag]
-        if re.match(u'^\d+$', distance) == None:
-            return distance
-        else:
-            distance = int(distance)
-            if distance == 6553:
-                tags_found[tag] = u'Infinity'
-            elif distance < 100:
-                tags_found[tag] = u'%d cm' % (distance)
-            else:
-                tags_found[tag] = u'%.2f m' % (float(distance) / 100.0)
+        tags_found[tag] = parse_canon_distance(tags_found[tag])
+    # Exif.CanonSi.0x0014
+    tag = u'Exif.CanonSi.0x0014'
+    if tag in tags_found:
+        tags_found[tag] = parse_canon_distance(tags_found[tag])
+    # Exif.CanonCs.AFPoint
+    tag = u'Exif.CanonCs.AFPoint'
+    if tag in tags_found:
+        tags_found[tag] = parse_canon_afpoint(tags_found[tag])
     # Convert GPSInfo data from DMS to decimal degrees.
     lat = u'Exif.GPSInfo.GPSLatitude'
     lon = u'Exif.GPSInfo.GPSLongitude'
@@ -204,14 +253,14 @@ def print_info(filename):
                         if print_separator:
                             print(u'')
                             print_separator = False
-                        print("%s: %s" % (tag[5:], tags_found[tag]))
+                        print_tag(tag, tags_found[tag])
                     tag = alt[i]
                     break
         if tag in tags_found:
             if print_separator:
                print(u'')
                print_separator = False
-            print("%s: %s" % (tag[5:], tags_found[tag]))
+            print_tag(tag, tags_found[tag])
     return
 
 
