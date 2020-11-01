@@ -21,7 +21,7 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 # Print some debugging info.
 DEBUG = False
@@ -55,7 +55,7 @@ EXIF_TAGS = [
     u'Exif.CanonCs.ExposureProgram',
     u'Exif.CanonCs.MeteringMode',
     u'Exif.CanonSi.SubjectDistance',
-    u'Exif.CanonSi.0x0014',
+    # u'Exif.CanonSi.0x0014',    # FocusDistanceLower? Always zero for IXUS 220HS and S120.
     u'Exif.CanonCs.AFPoint',
     u'Exif.CanonCs.FlashMode',
     u'Exif.GPSInfo.GPSLatitudeRef',
@@ -80,12 +80,16 @@ PRINT_TAGS = [
     u'Exif.Photo.ExposureBiasValue',
     u'Exif.Photo.MeteringMode',
     u'Exif.Photo.Flash',
+    u'Exif.OlympusCs.FlashMode',
+    u'Exif.CanonCs.FlashMode',
     u'',
     u'Exif.Photo.FocalLength',
-    u'Exif.Photo.SubjectDistance',
-    u'Exif.CanonSi.0x0014',
     u'Exif.OlympusCs.FocusMode',
     u'Exif.CanonCs.AFPoint',
+    u'Exif.Photo.SubjectDistance',
+    u'Exif.CanonSi.0x0014',
+    u'DepthOfField',
+    u'HyperfocalDistance',
     u'',
     u'Exif.GPSInfo.GPSLatitude',
     u'Exif.GPSInfo.GPSLongitude'
@@ -105,10 +109,7 @@ ALTERNATIVES = {
         2: u'Exif.CanonCs.ExposureProgram' },
     u'Exif.Photo.SubjectDistance': {
         1: u'Exif.OlympusFi.FocusDistance',
-        2: u'Exif.CanonSi.SubjectDistance' },
-    u'Exif.Photo.Flash': {
-        1: u'Exif.OlympusCs.FlashMode',
-        2: u'Exif.CanonCs.FlashMode' }
+        2: u'Exif.CanonSi.SubjectDistance' }
 }
 
 # Rename some tags when printing, specially unknown ones.
@@ -116,16 +117,39 @@ ALIASES = {
     u'Exif.CanonSi.0x0014': u'Exif.CanonSi.FocusDistanceLower'
 }
 
+# Circle of confusion in mm, specific for each camera.
+# https://www.dofmaster.com/digital_coc.html
+# https://www.dofmaster.com/dofjs.html
+CIRCLE_OF_CONFUSION = {
+    u'Canon IXUS 220HS':     0.005,  # 6.16 x 4.62 mm (1/2.3")
+    u'Canon PowerShot S120': 0.006,  # 7.44 x 5.58 mm (1/1.7")
+    u'E-M10MarkII':          0.015   # 17.3 x 13.0 mm (4/3")
+}
 
 #---------------------------------------------------------------
 #---------------------------------------------------------------
 def print_tag(tagname, value):
     if tagname in ALIASES:
         tagname = ALIASES[tagname]
-    if tagname.startswith(u'Exiv.'):
+    if tagname.startswith(u'Exif.'):
         tagname = tagname[5:]
     print(u'%s: %s' % (tagname, value))
 
+#---------------------------------------------------------------
+# Convert an human readable distance into millimeters.
+# The infinity value is returned as -1.0.
+# Return None if cannot parse the string.
+#---------------------------------------------------------------
+def parse_distance2mm(distance):
+    if u'inf' in distance.lower():
+        return -1.0
+    elif u'cm' in distance.lower():
+        mult = 10.0
+    elif u'm' in distance.lower():
+        mult = 1000.0
+    else:
+        return None
+    return float(re.sub(u'[^\d\.]', '', distance)) * mult
 
 #---------------------------------------------------------------
 # Convert Canon focus distance into human-readable format.
@@ -138,9 +162,9 @@ def parse_canon_distance(distance):
         if distance == 6553:
             return u'Infinity'
         elif distance < 100:
-            return u'%d cm' % (distance)
+            return u'%d cm' % (distance,)
         else:
-            return u'%.2f m' % (float(distance) / 100.0)
+            return u'%.2f m' % ((float(distance) / 100.0),)
 
 
 #---------------------------------------------------------------
@@ -233,7 +257,50 @@ def print_info(filename):
     ydim = u'Exif.Photo.PixelYDimension'
     if xdim in tags_found and ydim in tags_found:
         # Exif.Photo.PixelDimensions does not exists as Exif tag.
-        tags_found[u'Exif.Photo.PixelDimensions'] = "%d x %d" % (int(tags_found[xdim]), int(tags_found[ydim]))
+        tags_found[u'Exif.Photo.PixelDimensions'] = u'%d x %d' % (int(tags_found[xdim]), int(tags_found[ydim]))
+
+    # Get subject distance, if any.
+    #-----------------------------------------------------------
+    sd = None
+    for tag in [u'Exif.Photo.SubjectDistance', u'Exif.OlympusFi.FocusDistance', u'Exif.CanonSi.SubjectDistance']:
+        if tag in tags_found:
+            sd = parse_distance2mm(tags_found[tag])
+            break
+
+    # Calculate HyperfocalDistance and DepthOfField.
+    #-----------------------------------------------------------
+    tag = u'Exif.Image.Model'
+    tag_fl = u'Exif.Photo.FocalLength'
+    tag_fn = u'Exif.Photo.FNumber'
+    if tag in tags_found and tag_fl in tags_found and tag_fn in tags_found:
+        model = tags_found[tag].strip()
+        if model in CIRCLE_OF_CONFUSION:
+            cc = CIRCLE_OF_CONFUSION[model]
+            try:
+                fl = float(re.sub(u'[^\d\.]', '', tags_found['Exif.Photo.FocalLength']))
+                fn = float(re.sub(u'[^\d\.]', '', tags_found['Exif.Photo.FNumber']))
+                hd = fl ** 2 / (fn * cc) + fl
+                tags_found[u'HyperfocalDistance'] = u'%.2f m' % ((hd / 1000),)
+            except:
+                hd = None
+                hyperfocal = u'Error'
+                tags_found[u'HyperfocalDistance'] = u'Error'
+            if hd is not None and sd is not None:
+                # All the values are expressed in (floating point) millimeters:
+                #   fl = focal lenght, sd = subject distance
+                #   cc = circle of confusion, hd = hyperfocal distance,
+                if sd == -1.0:
+                    # Subject distance is infinite.
+                    dof_n = u'%.2f m' % ((hd / 1000),)
+                    dof_f = u'Infinity'
+                else:
+                    dof_n = u'%.2f m' % ((sd * (hd - fl) / (hd + sd - 2 * fl) / 1000),)
+                    if hd - (sd - fl) < 0.01:
+                        # Subject distance is greather than hyperfocal distance.
+                        dof_f = u'Infinity'
+                    else:
+                        dof_f = u'%.2f m' % ((sd * (hd - fl) / (hd - (sd - fl)) / 1000),)
+                tags_found[u'DepthOfField'] = u'%s - %s' % (dof_n, dof_f)
 
     # Print Exif tags.
     #-----------------------------------------------------------
