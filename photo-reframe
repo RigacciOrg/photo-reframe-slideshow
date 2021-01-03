@@ -44,7 +44,7 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
 
@@ -92,8 +92,11 @@ GEOMETRY_FLAG_NOTSET = '#ff7c7c'   # Red
 GEOMETRY_FLAG_CHANGED = '#ffff7c'  # Yellow
 GEOMETRY_FLAG_HIDE = '#000000'     # Border hidden in full-screen
 
+# Info messages are shown for a short time into a pop-up.
+POPUP_TIMEOUT = 3.0
+
 # Exit read-only mode by pressing CHEAT_REPEAT_KEY_COUNT times "S", then "Y".
-CHEAT_REPEAT_KEY_COUNT = 7         
+CHEAT_REPEAT_KEY_COUNT = 7
 
 QLABEL_COMMENT_CSS = """QLabel {
     font: %dpx;
@@ -509,6 +512,7 @@ class photoReframeApp(QMainWindow):
         view_width, view_height = self.calculateImageViewSize()
         self.view.resize(view_width, view_height)
         self.caption_label = QLabel(self)
+        self.popup_label = QLabel(self)
         self.imginfo_label = QLabel(self)
         # Go fullscreen if requested.
         if args.fullscreen:
@@ -517,6 +521,8 @@ class photoReframeApp(QMainWindow):
         # Cannot use Python's threading because QtGui is not thread-safe: can't
         # execute GUI functions into a timer function. Use QtCore.QTimer() instead.
         # https://srinikom.github.io/pyside-docs/PySide/QtCore/QTimer.html
+        self.close_popup_timer = QtCore.QTimer(self)
+        self.close_popup_timer.timeout.connect(self.popup)
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.nextImage)
         if args.play:
@@ -912,11 +918,11 @@ F11 or F\tToggle fullscreen mode
 W\tZoom to fit image width
 H\tZoom to fit image height
 Z\tZoom-in to remove blank space
-R\tUpdate image by cycling Exif Orientation tag
+R\tRotate image changing Exif Orientation tag%s
 Return\tAccept current geometry for image
 G\tZoom to current image geometry
 Canc\tForget current geometry (remove from playlist)
-I\tPrint image and window data
+I\tView image metadata
 Space\tGo to next image
 Backspace\tGo to previous image
 PgDown\tAdvance by 10 images
@@ -928,7 +934,7 @@ End\tGo to the last image
 C\tToggle display of Exif UserComment
 P\tToggle autoplay
 S\tSave the playlist with updated gemetries%s
-Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
+Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
         dlg.setText(msg)
         dlg.setIcon(QMessageBox.Information)
         dlg.setInformativeText(u'Version: %s\n%s' % (__version__, __copyright__))
@@ -973,6 +979,30 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
                 logging.error(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
 
 
+    def popup(self, msg=None):
+        """ Show a message for a short time """
+
+        self.popup_label.clear()
+        if msg is None:
+            self.close_popup_timer.stop()
+            self.popup_label.resize(0, 0)
+            return
+        width, height = self.calculateImageViewSize()
+        pad_x, pad_y = self.calculateImageViewPadding()
+        font_px = int(height * 0.052)
+        label_pad_x = int(font_px * 0.50)
+        label_pad_y = int(font_px * 0.10)
+        label_margin_top = int(font_px * 0.50)
+        self.popup_label.setText(msg)
+        self.popup_label.setStyleSheet(QLABEL_COMMENT_CSS % (font_px,))
+        self.popup_label.setAlignment(QtCore.Qt.AlignCenter)
+        label_w = self.popup_label.sizeHint().width() + label_pad_x * 2
+        label_h = self.popup_label.sizeHint().height() + label_pad_y * 2
+        self.popup_label.resize(label_w, label_h)
+        self.popup_label.move(width - label_w, (label_margin_top + pad_y))
+        self.close_popup_timer.start(POPUP_TIMEOUT * 1000)
+
+
     def keyPressEvent(self, event):
         """ Handle key pressed by the user """
 
@@ -985,7 +1015,9 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
             self.shareDialog()
         elif event.key() == QtCore.Qt.Key_F3:
             """ Show Edit UserComment dialog """
-            if not self.read_only:
+            if self.read_only:
+                self.popup(u'Exif editing is disabled')
+            else:
                 self.userCommentDialog()
         elif event.key() == QtCore.Qt.Key_F11 or event.key() == QtCore.Qt.Key_F:
             """ Toggle fullscreen mode """
@@ -1011,7 +1043,10 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
             self.fitImageHeight()
         elif event.key() == QtCore.Qt.Key_R:
             """ Rotate the image by 90 degrees """
-            self.imageRotate()
+            if self.read_only:
+                self.popup(u'Image rotating is disabled')
+            else:
+                self.imageRotate()
         elif event.key() == QtCore.Qt.Key_I:
             """ Print image info and window status data """
             self.info_display = not self.info_display
@@ -1035,6 +1070,8 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
         elif event.key() == QtCore.Qt.Key_C:
             """ Toggle Exif UserComment caption """
             self.caption_display = not self.caption_display
+            msg = u'Show comment' if self.caption_display else u'Hide comment'
+            self.popup(msg)
             self.showImageCaption()
         elif event.key() == QtCore.Qt.Key_P:
             """ Toggle autoplay of images """
@@ -1042,8 +1079,10 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
         elif event.key() == QtCore.Qt.Key_S:
             """ Save the playlist with updated gemetries """
             if not self.read_only:
+                self.popup(u'Saving playlist...')
                 self.savePlaylist()
             else:
+                self.popup(u'Playlist saving is disabled')
                 self.force_save_cheat += 1
                 if self.force_save_cheat > CHEAT_REPEAT_KEY_COUNT:
                     self.force_save_cheat = 0
@@ -1051,7 +1090,9 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
             if self.read_only:
                 if self.force_save_cheat == CHEAT_REPEAT_KEY_COUNT:
                     self.read_only = False
-                    logging.warning(u'Read-only mode disabled!')
+                    msg = u'Read-only mode disabled!'
+                    self.popup(msg)
+                    logging.warning(msg)
                 else:
                     self.force_save_cheat = 0
         elif event.key() == QtCore.Qt.Key_Less:
@@ -1110,6 +1151,8 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
 
     def closeEvent(self, event):
         """ Close app: stop timer, close fullscreen, ask to save """
+        if self.close_popup_timer.isActive():
+            self.close_popup_timer.stop()
         if self.timer.isActive():
             self.timer.stop()
         if self.isFullScreen():
@@ -1284,13 +1327,15 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip)
 
     def toggleAutoplay(self):
         if self.timer.isActive():
-            logging.info(u'Stopping autoplay')
+            msg = u'Stopping autoplay'
             self.limit_loops = 0
             self.limit_slides = 0
             self.timer.stop()
         else:
-            logging.info(u'Starting autoplay')
+            msg = u'Starting autoplay'
             self.timer.start(self.slide_time * 1000)
+        logging.info(msg)
+        self.popup(msg)
 
 
 # ------------------------------------------------------------------------
