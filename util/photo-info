@@ -8,6 +8,11 @@ tool, then print only a selection of them. Some generic
 Exif tags are replaced by custom ones, e.g.
 Exif.Photo.ExposureProgram is replaced by the more specific
 Exif.OlympusCs.ExposureMode, if it exists.
+
+Exif tags are parsed from the command line:
+
+  exiv2 print -u -p a [image_file]
+
 """
 
 from __future__ import print_function
@@ -18,10 +23,10 @@ import subprocess
 import sys
 
 __author__ = "Niccolo Rigacci"
-__copyright__ = "Copyright 2020 Niccolo Rigacci <niccolo@rigacci.org>"
+__copyright__ = "Copyright 2020-2021 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 # Print some debugging info.
 DEBUG = False
@@ -44,6 +49,8 @@ EXIF_TAGS = [
     u'Exif.Photo.ExposureMode',
     u'Exif.Photo.ExposureBiasValue',
     u'Exif.Photo.MeteringMode',
+    u'Exif.Photo.WhiteBalance',
+    u'Exif.Photo.LightSource',
     u'Exif.Photo.Flash',
     u'Exif.Photo.FocalLength',
     u'Exif.Photo.SubjectDistance',
@@ -52,12 +59,14 @@ EXIF_TAGS = [
     u'Exif.OlympusCs.FocusMode',
     u'Exif.OlympusFi.FocusDistance',
     u'Exif.OlympusCs.FlashMode',
+    u'Exif.OlympusCs.WhiteBalance',
     u'Exif.CanonCs.ExposureProgram',
     u'Exif.CanonCs.MeteringMode',
     u'Exif.CanonSi.SubjectDistance',
     # u'Exif.CanonSi.0x0014',    # FocusDistanceLower? Always zero for IXUS 220HS and S120.
     u'Exif.CanonCs.AFPoint',
     u'Exif.CanonCs.FlashMode',
+    u'Exif.CanonSi.WhiteBalance',
     u'Exif.GPSInfo.GPSLatitudeRef',
     u'Exif.GPSInfo.GPSLatitude',
     u'Exif.GPSInfo.GPSLongitudeRef',
@@ -65,6 +74,9 @@ EXIF_TAGS = [
 ]
 
 # Tags that are printed, with separators.
+# Place only the generic tag here (e.g. Exif.Photo.LightSource).
+# If there exists a preferred alternative, it will be automatically
+# replaced (e.g. Exif.OlympusCs.WhiteBalance). See ALTERNATIVES below.
 PRINT_TAGS = [
     u'Exif.Filename',               # Fake
     u'Exif.Photo.PixelDimensions',  # Fake
@@ -82,6 +94,7 @@ PRINT_TAGS = [
     u'Exif.Photo.Flash',
     u'Exif.OlympusCs.FlashMode',
     u'Exif.CanonCs.FlashMode',
+    u'Exif.Photo.WhiteBalance',
     u'',
     u'Exif.Photo.FocalLength',
     u'Exif.OlympusCs.FocusMode',
@@ -96,6 +109,7 @@ PRINT_TAGS = [
 ]
 
 # For some generic tags, there may be a more specific alternative.
+# Place the preferred alternative first.
 ALTERNATIVES = {
     u'Exif.Photo.DateTimeOriginal': {
         1: u'Exif.Photo.DateTimeOriginal',
@@ -109,7 +123,11 @@ ALTERNATIVES = {
         2: u'Exif.CanonCs.ExposureProgram' },
     u'Exif.Photo.SubjectDistance': {
         1: u'Exif.OlympusFi.FocusDistance',
-        2: u'Exif.CanonSi.SubjectDistance' }
+        2: u'Exif.CanonSi.SubjectDistance' },
+    u'Exif.Photo.WhiteBalance': {
+        1: u'Exif.OlympusCs.WhiteBalance',
+        2: u'Exif.CanonSi.WhiteBalance',
+        3: u'Exif.Photo.LightSource' }
 }
 
 # Rename some tags when printing, specially unknown ones.
