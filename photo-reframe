@@ -18,6 +18,9 @@ on the screen. Screen aspect ratio defaults to 16:9, but can
 be changed by command line options.
 
 Press F1 or ? for a list of keyboard shortcuts.
+
+See function spitDataStructures() to learn about internal
+data structures used by the program.
 """
 
 # For Qt5 doc see: https://doc.qt.io/qt-5/qmainwindow.html
@@ -42,10 +45,10 @@ from PyQt5.QtGui import QPixmap, QColor, QTransform, QPalette, QCursor, QBrush
 from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox, QLabel, QInputDialog, QLineEdit
 
 __author__ = "Niccolo Rigacci"
-__copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
+__copyright__ = "Copyright 2019-2022 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
 
@@ -348,12 +351,12 @@ class photoView(QGraphicsView):
             myMainWindow.nextImage(10)
             return
         if event.key() == QtCore.Qt.Key_Home:
-            new_pos = list(myMainWindow.images_playlist).index(myMainWindow.first_image_index)
+            new_pos = myMainWindow.images_playlist.index(myMainWindow.first_image_index)
             if new_pos != 0:
                 myMainWindow.nextImage(new_pos)
             return
         if event.key() == QtCore.Qt.Key_End:
-            new_pos = list(myMainWindow.images_playlist).index(myMainWindow.last_image_index)
+            new_pos = myMainWindow.images_playlist.index(myMainWindow.last_image_index)
             if new_pos != 0:
                 myMainWindow.nextImage(new_pos)
             return
@@ -394,6 +397,7 @@ class photoReframeApp(QMainWindow):
         self.current_index = None         # Index of the image currently displayed.
         self.read_only = False            # If True inhibits the saving (overwriting) of the playlist.
         self.force_save_cheat = 0         # Exit read-only mode by pressing several times "S", then "Y".
+        self.pending_delete = False       # A request for file deletion is waiting the "Y" confirm.
 
         self.current_image = None         # Filename (no path) of currently displayed image.
         self.exif_orientation_tag = None  # Image's Exif Orientation tag (see EXIF_ROTATE dictionary).
@@ -540,7 +544,7 @@ class photoReframeApp(QMainWindow):
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.nextImage)
         if args.play:
-            self.timer.start(self.slide_time * 1000)
+            self.timer.start(int(self.slide_time * 1000))
 
         self.images_playlist.rotate(1)
         self.nextImage()
@@ -555,7 +559,7 @@ class photoReframeApp(QMainWindow):
 
     def setScreensaver(self, enable):
         """ Enable or disable the screensaver, calling external commands """
-        
+
         if enable:
             cmd = SCREENSAVER_ON_COMMAND
         else:
@@ -588,7 +592,7 @@ class photoReframeApp(QMainWindow):
         label_w = self.caption_label.sizeHint().width() + label_pad_x * 2
         label_h = self.caption_label.sizeHint().height() + label_pad_y * 2
         self.caption_label.resize(label_w, label_h)
-        self.caption_label.move(pad_x + (width - label_w) / 2, (height - label_h + pad_y - label_margin_bottom))
+        self.caption_label.move(int(pad_x + (width - label_w) / 2), int(height - label_h + pad_y - label_margin_bottom))
 
 
     def showImageInfo(self):
@@ -604,7 +608,7 @@ class photoReframeApp(QMainWindow):
         try:
             info = subprocess.check_output(cmd).decode('utf-8').strip()
         except Exception as e:
-            logging.error(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e)))
+            logging.error(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e),))
             info = None
         if info == None or info == '':
             self.imginfo_label.resize(0, 0)
@@ -614,9 +618,9 @@ class photoReframeApp(QMainWindow):
         print('')
         width, height = self.calculateImageViewSize()
         pad_x, pad_y = self.calculateImageViewPadding()
-        font_px = int(width * 0.02)
-        label_x = int(height * 0.01)
-        label_y = int(height * 0.01)
+        font_px = int(height * 0.026)
+        label_x = int(height * 0.010)
+        label_y = int(height * 0.010)
         self.imginfo_label.setText(info)
         self.imginfo_label.setStyleSheet(QLABEL_INFO_CSS % (font_px,))
         label_w = self.imginfo_label.sizeHint().width()
@@ -863,6 +867,16 @@ class photoReframeApp(QMainWindow):
         print('')
 
 
+    def spitDataStructures(self):
+        """ Print data structures (dictionaries, deque, indexes) """
+        logging.info('image_names: %s' % (self.image_names,))
+        logging.info('image_geometries: %s' % (self.image_geometries,))
+        logging.info('images_playlist: %s' % (self.images_playlist,))
+        logging.info('first_image_index: %d' % (self.first_image_index),)
+        logging.info('last_image_index: %d' % (self.last_image_index),)
+        logging.info('current_index: %d' % (self.current_index),)
+
+
     def resizeEvent(self, resizeEvent):
         """ On resizing of the app's window, adjust the image view """
 
@@ -961,6 +975,7 @@ Return\tAccept current geometry for image
 G\tZoom to current image geometry
 Canc\tForget current geometry (remove from playlist)
 I\tView image metadata
+D\tDelete image from filesystem%s
 Space\tGo to next image
 Backspace\tGo to previous image
 PgDown\tAdvance by 10 images
@@ -972,7 +987,7 @@ End\tGo to the last image
 C\tToggle display of Exif UserComment
 P\tToggle autoplay
 S\tSave the playlist with updated gemetries%s
-Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
+Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip, read_only_tip)
         dlg.setText(msg)
         dlg.setIcon(QMessageBox.Information)
         dlg.setInformativeText(u'Version: %s\n%s' % (__version__, __copyright__))
@@ -992,7 +1007,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
             try:
                 ret = subprocess.call(cmd)
             except Exception as e:
-                logging.error(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e)))
+                logging.error(u'Subprocess "%s" error: %s' % (SHARE_COMMAND, str(e),))
 
 
     def userCommentDialog(self):
@@ -1014,12 +1029,45 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
                     self.exif_usercomment = None
                 self.showImageCaption()
             except Exception as e:
-                logging.error(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e)))
+                logging.error(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
+
+
+    def deleteCurrentImageFile(self):
+        """ Delete file of currently displayed image"""
+        if len(self.images_playlist) <= 1:
+            self.popup('Cannot remove the last image')
+            logging.warning('Cannot delete the last image from playlist')
+            return
+        filename = os.path.join(self.directory, self.current_image)
+        if os.path.isfile(filename):
+            logging.info(u'Removing file: %s' % (filename,))
+            os.remove(filename)
+            self.popup(u'Removed %s' % (self.current_image,))
+        else:
+            logging.error('File "%s" does not exists' % (filename,))
+            return
+        # Adjust pointers and lists (dictionaries, deque and indexes).
+        deleting = self.current_index
+        if deleting == self.first_image_index:
+            i = self.images_playlist.index(self.first_image_index) + 1
+            if i >= len(self.images_playlist):
+                i = 0
+            self.first_image_index = self.images_playlist[i]
+        if deleting == self.last_image_index:
+            i = self.images_playlist.index(self.last_image_index) - 1
+            if i < 0:
+                i = len(self.images_playlist) - 1
+            self.last_image_index = self.images_playlist[i]
+        del self.image_names[deleting]
+        del self.image_geometries[deleting]
+        self.images_playlist.remove(deleting)
+        self.current_index = self.images_playlist[0]
+        self.playlist_changed = True
+        self.nextImage(0)
 
 
     def popup(self, msg=None):
         """ Show a message for a short time """
-
         self.popup_label.clear()
         if msg is None:
             self.close_popup_timer.stop()
@@ -1038,13 +1086,19 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
         label_h = self.popup_label.sizeHint().height() + label_pad_y * 2
         self.popup_label.resize(label_w, label_h)
         self.popup_label.move(width - label_w, (label_margin_top + pad_y))
-        self.close_popup_timer.start(POPUP_TIMEOUT * 1000)
+        self.close_popup_timer.start(int(POPUP_TIMEOUT * 1000))
 
 
     def keyPressEvent(self, event):
         """ Handle key pressed by the user """
-
         # See https://doc.qt.io/qt-5/qt.html#Key-enum
+        if self.pending_delete == True:
+            """ Delete file request pending, check for confirm """
+            if event.key() == QtCore.Qt.Key_Y:
+                self.deleteCurrentImageFile()
+            self.pending_delete = False
+            self.popup()
+            return
         if event.key() == QtCore.Qt.Key_F1 or event.key() == QtCore.Qt.Key_Question:
             """ Show help dialog """
             self.helpDialog()
@@ -1089,6 +1143,13 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
             """ Print image info and window status data """
             self.info_display = not self.info_display
             self.showImageInfo()
+        elif event.key() == QtCore.Qt.Key_D:
+            """ Delete image file from disk """
+            if self.read_only:
+                self.popup(u'Deleting files is disabled')
+            else:
+                self.popup(u'Confirm delete? (Y/N)')
+                self.pending_delete = True;
         elif event.key() == QtCore.Qt.Key_Return or event.key() == QtCore.Qt.Key_Enter:
             """ Use current geometry for image """
             self.spitImageStatus()
@@ -1180,7 +1241,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
         try:
             ret = subprocess.call(cmd)
         except Exception as e:
-            logging.error(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e)))
+            logging.error(u'Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
             title = u'Subprocess Error'
             text = u'Error executing external command:\n%s' % ' '.join(cmd)
             self.myMsgBoxDialog(title, QMessageBox.Critical, text, QMessageBox.Ok)
@@ -1339,13 +1400,17 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
             self.playlist_changed = True
             self.nextImage()
 
+
     def savePlaylist(self):
         """ Save a new playlist file, with updated images geometries """
         logging.info(u'Saving updated playlist "%s"' % (self.playlist,))
+        # Reset the images_playlist deque rotation to the first image.
+        current_offset = self.images_playlist.index(self.first_image_index)
+        self.images_playlist.rotate(-current_offset)
         try:
             with open(self.playlist, 'w') as f:
                 f.write('#EXTM3U-PHOTO-REFRAME\n')
-                for i in range(1, len(self.images_playlist) + 1):
+                for i in self.images_playlist:
                     if self.image_geometries[i] is not None:
                         print('%s|%s' % (self.image_names[i], self.image_geometries[i]))
                         f.write('%s|%s\n' % (self.image_names[i], self.image_geometries[i]))
@@ -1355,6 +1420,8 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
             self.playlist_changed = False
         except Exception as e:
             logging.error(u'Error saving playlist: %s' % (str(e),))
+        # Rotate images_playlist to the previous position.
+        self.images_playlist.rotate(current_offset)
 
 
     def toggleFullscreen(self):
@@ -1374,7 +1441,7 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
             self.timer.stop()
         else:
             msg = u'Starting autoplay'
-            self.timer.start(self.slide_time * 1000)
+            self.timer.start(int(self.slide_time * 1000))
         logging.info(msg)
         self.popup(msg)
 
@@ -1382,10 +1449,8 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip)
 # ------------------------------------------------------------------------
 # ------------------------------------------------------------------------
 if __name__ == '__main__':
-
     app = QApplication(sys.argv)
     myMainWindow = photoReframeApp()
     myMainWindow.spitWindowSizes()
-
     # Start user interaction, then exit.
     sys.exit(app.exec_())

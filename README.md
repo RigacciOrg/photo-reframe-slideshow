@@ -2,11 +2,11 @@
 
 **Slideshow with on-the-fly, user defined image cropping and resizing**
 
-This is a stand-alone program, which requires the Python 
-language (tested with version 3.5 and 2.7) with the PyQt5 and 
-PIL libraries.
+This is a stand-alone program, which requires the Python
+language (tested with version 3.9) with the PyQt5 and PIL
+libraries.
 
-It requires also the external command line tool **exiv2**, to 
+It requires also the external command line tool **exiv2**, to
 eventually fix a wrong Exif Orientation tag in images.
 
 Usage:
@@ -112,7 +112,8 @@ This is the help for every **keyboard shortcuts**:
 
 ```
 F1 or ?   Show this help
-F2        Share with...
+F2        Share With...
+F3        Edit Exif UserComment tag
 F11 or F  Toggle fullscreen mode
 +         Zoom in
 -         Zoom out
@@ -120,19 +121,24 @@ F11 or F  Toggle fullscreen mode
 W         Zoom to fit image width
 H         Zoom to fit image height
 Z         Zoom-in to remove blank space
-R         Update image by cycling Exif Orientation tag
+R         Rotate image changing Exif Orientation tag
 Return    Accept current geometry for image
 G         Zoom to current image geometry
 Canc      Forget current geometry (remove from playlist)
-I         Print image and window data
+I         View image metadata
+D         Delete image from filesystem
 Space     Go to next image
 Backspace Go to previous image
+PgDown    Advance by 10 images
+PgUp      Backward by 10 images
+Home      Go to the first image
+End       Go to the last image
 <         Shift the image backward into the playlist
 >         Shift the image forward into the playlist
 C         Toggle display of Exif UserComment
 P         Toggle autoplay
 S         Save the playlist with updated gemetries
-Q         Quit program"""
+Esc or Q  Quit program
 ```
 
 When the program run in window mode, it will show the image into 
