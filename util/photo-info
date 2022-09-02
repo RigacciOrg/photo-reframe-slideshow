@@ -23,10 +23,10 @@ import subprocess
 import sys
 
 __author__ = "Niccolo Rigacci"
-__copyright__ = "Copyright 2020-2021 Niccolo Rigacci <niccolo@rigacci.org>"
+__copyright__ = "Copyright 2020-20222 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 # Print some debugging info.
 DEBUG = False
@@ -55,15 +55,18 @@ EXIF_TAGS = [
     'Exif.Photo.FocalLength',
     'Exif.Photo.SubjectDistance',
     'Exif.OlympusCs.ExposureMode',
-    'Exif.OlympusCs.MeteringMode',
-    'Exif.OlympusCs.FocusMode',
-    'Exif.OlympusFi.FocusDistance',
     'Exif.OlympusCs.FlashMode',
+    'Exif.OlympusFi.FocusDistance',
+    'Exif.OlympusCs.FocusMode',
+    'Exif.OlympusCs.MeteringMode',
+    'Exif.OlympusCs.PictureMode',
+    'Exif.OlympusCs.ImageStabilization',
     'Exif.OlympusCs.WhiteBalance',
+    'Exif.OlympusIp.FaceDetect',    # If face was detected?
     'Exif.CanonCs.ExposureProgram',
     'Exif.CanonCs.MeteringMode',
     'Exif.CanonSi.SubjectDistance',
-    # 'Exif.CanonSi.0x0014',    # FocusDistanceLower? Always zero for IXUS 220HS and S120.
+    #'Exif.CanonSi.0x0014',    # FocusDistanceLower? Always zero for IXUS 220HS and S120.
     'Exif.CanonCs.AFPoint',
     'Exif.CanonCs.FlashMode',
     'Exif.CanonSi.WhiteBalance',
@@ -87,6 +90,7 @@ PRINT_TAGS = [
     'Exif.Photo.FNumber',
     'Exif.Photo.ExposureTime',
     '',
+    'Exif.OlympusCs.PictureMode',
     'Exif.Photo.ExposureProgram',
     'Exif.Photo.ExposureMode',
     'Exif.Photo.ExposureBiasValue',
@@ -133,6 +137,17 @@ ALTERNATIVES = {
 # Rename some tags when printing, specially unknown ones.
 ALIASES = {
     'Exif.CanonSi.0x0014': 'Exif.CanonSi.FocusDistanceLower'
+}
+
+# Rewrite some tags values as reported by the Exiv2 library.
+VAL_ALIASES = {
+    'Exif.OlympusCs.ImageStabilization': {
+        'Off':        'Off: Still-I.S. Off',
+        'On, Mode 1': '1: All Direction Shake I.S.',
+        'On, Mode 2': '2: Vertical Shake I.S.',
+        'On, Mode 3': '3: Horizontal Shake I.S.',
+        '(4)':        'AUTO: Auto I.S.'
+    }
 }
 
 # Circle of confusion in mm, specific for each camera.
@@ -240,6 +255,10 @@ def print_info(filename):
             val = field[3].decode('utf-8', errors='ignore')
             if tag in EXIF_TAGS:
                 if val != None and val != '':
+                    if tag in VAL_ALIASES:
+                        if val in VAL_ALIASES[tag]:
+                            # Replace the tag value with the alias.
+                            val = VAL_ALIASES[tag][val]
                     tags_found[tag] = val
 
     # Handle cases not parsed by the Exiv2 library.
