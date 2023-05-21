@@ -45,10 +45,10 @@ from PyQt5.QtGui import QPixmap, QColor, QTransform, QPalette, QCursor, QBrush
 from PyQt5.QtWidgets import QMainWindow, QApplication, QGraphicsScene, QGraphicsView, QFrame, QMessageBox, QLabel, QInputDialog, QLineEdit
 
 __author__ = "Niccolo Rigacci"
-__copyright__ = "Copyright 2019-2022 Niccolo Rigacci <niccolo@rigacci.org>"
+__copyright__ = "Copyright 2019-2023 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
 
@@ -265,13 +265,18 @@ class getImageState():
         self.geom_x = int(round(self.horizontal_scroll / mainWindow.zoom))
         self.geom_y = int(round(self.vertical_scroll / mainWindow.zoom))
         # Scrollbars values have different min/max range when Exif-rotated.
+        # Only negative values must be corrected (zero is OK).
         if mainWindow.exif_orientation_tag == 6:
-            self.geom_x += self.image_width
+            if self.horizontal_scroll < 0:
+                self.geom_x += self.image_width
         elif mainWindow.exif_orientation_tag == 8:
-            self.geom_y += self.image_height
+            if self.vertical_scroll < 0:
+                self.geom_y += self.image_height
         elif mainWindow.exif_orientation_tag == 3:
-            self.geom_x += self.image_width
-            self.geom_y += self.image_height
+            if self.horizontal_scroll < 0:
+                self.geom_x += self.image_width
+            if self.vertical_scroll < 0:
+                self.geom_y += self.image_height
 
 
     def adjustGeometry(self):
