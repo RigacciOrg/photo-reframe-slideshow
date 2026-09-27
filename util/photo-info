@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 photo-info -- Print selected Exif tags for an image.
 
@@ -26,7 +25,7 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2020-20222 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 # Print some debugging info.
 DEBUG = False
@@ -217,25 +216,39 @@ def parse_canon_afpoint(tag_value):
 
 
 #---------------------------------------------------------------
-# Convert "41.1264568deg" or "43deg 51' 29.973" into float.
+# Convert DMS formats used by exiv2 to decimal degrees.
+#
+# Accepted:
+#   "41.1264568deg"
+#   "43deg 51' 29.973\""
+#   "11 deg 5' 53.36\""
 #---------------------------------------------------------------
 def parse_dms(dms):
-    """ Convert degrees, minutes and sconds to decimal degrees """
+    """Convert degrees, minutes and seconds to decimal degrees."""
     dms = dms.strip()
-    dd = 0.0
+    # Match number followed by optional whitespace and an optional unit.
+    # Numbers matched: 12, +12, -12, 12.5, 12.50, 12., .123
+    # Units: deg, ' or "
+    pattern = re.compile(r'([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(deg|\'|")?')
     try:
-        for part in dms.split(None, 2):
-            if part.endswith('deg'):
-                dd += float(re.sub('[^\d\.]', '', part))
-            elif part.endswith("'"):
-                dd += float(re.sub('[^\d\.]', '', part)) / 60
-            elif part.endswith('"'):
-                dd += float(re.sub('[^\d\.]', '', part)) / 3600
+        matches = pattern.findall(dms)
+        if not matches:
+            raise ValueError("invalid DMS value")
+        dd = 0.0
+        for number, unit in matches:
+            value = float(number)
+            if unit == 'deg':
+                dd += value
+            elif unit == "'":
+                dd += value / 60.0
+            elif unit == '"':
+                dd += value / 3600.0
             else:
-                dd += float(part)
+                # No unit: treat as decimal degrees.
+                dd += value
         return dd
     except Exception as e:
-        print('parse_dms("%s"): %s' % (dms, e.__repr__()), file=sys.stderr)
+        print('parse_dms("%s"): %s' % (dms, repr(e)), file=sys.stderr)
         return None
 
 
