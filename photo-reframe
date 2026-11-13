@@ -64,7 +64,7 @@ __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2023 Niccolo Rigacci <niccolo@rigacci.org>"
 __license__ = "GPLv3-or-later"
 __email__ = "niccolo@rigacci.org"
-__version__ = "0.5.4"
+__version__ = "0.5.6"
 
 logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
 
@@ -78,6 +78,31 @@ EXIV2_COMMAND = 'exiv2'
 SHARE_COMMAND = 'photo-share'
 # External command to get Exif data, etc.
 INFO_COMMAND = 'photo-info'
+
+# Optional external "plugin" command used to edit the Exif UserComment
+# tag (F3 key) instead of the internal dialog box. When set (not None)
+# the plugin is used; when None the internal dialog is used.
+#
+# The value is the command to execute; it can be set here, via the
+# PHOTO_REFRAME_EXIF_TAGGER environment variable, or overridden by the
+# --exif-tagger command line option (which takes precedence).
+#
+# Contract for the external plugin ("unchanged" protocol):
+#   * It is invoked with the image filename as its only argument.
+#   * It must edit the Exif.Photo.UserComment tag by itself (e.g. by
+#     calling exiv2) directly on that file.
+#   * If it leaves the file untouched, it must print exactly the string
+#     "unchanged" on its standard output, so this app can skip reloading
+#     the tag. Any other output (or none) is treated as "the tag may
+#     have changed", and the tag is re-read from the file.
+#   * It must exit with return code 0 on success; a non-zero return code
+#     is logged and the tag is not re-read.
+# NOTE: the plugin is launched asynchronously (via QProcess), so the
+# photo-reframe window keeps repainting while the plugin is on screen.
+# The tag is re-read when the plugin quits, but only if the same image
+# is still displayed (the user may navigate meanwhile).
+EXIF_TAGGER_COMMAND = os.environ.get('PHOTO_REFRAME_EXIF_TAGGER', None)
+
 # External commands to disable/enable the screensaver; use [] to skip.
 SCREENSAVER_OFF_COMMAND = ['screensaver-off']
 SCREENSAVER_ON_COMMAND = ['screensaver-on']
@@ -89,7 +114,7 @@ DEFAULT_SLIDE_TIME = 6.0
 PLAYLIST = 'playlist'
 PLAYLIST_EXT = 'm3u'
 EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff')
-GEOMETRY_RE = '(\d+)x(\d+)\+(\d+)\+(\d+)'
+GEOMETRY_RE = r'(\d+)x(\d+)\+(\d+)\+(\d+)'
 
 # Ignore these filenames when scanning directory for images.
 IGNORE_FILES = ['folder.jpg', 'folder.png']
@@ -417,6 +442,9 @@ class photoReframeApp(QMainWindow):
         self.last_image_index = None      # Index of the last image to show.
         self.current_index = None         # Index of the image currently displayed.
         self.read_only = False            # If True inhibits the saving (overwriting) of the playlist.
+        self.exif_tagger_command = None   # External command to edit UserComment (F3); None = internal dialog.
+        self.exif_tagger_process = None   # Running QProcess for the UserComment plugin (None = idle).
+        self.exif_tagger_image = None     # Image (basename) the plugin was launched for.
         self.force_save_cheat = 0         # Exit read-only mode by pressing several times "S", then "Y".
         self.pending_delete = False       # A request for file deletion is waiting the "Y" confirm.
 
@@ -449,6 +477,7 @@ class photoReframeApp(QMainWindow):
         parser.add_argument('--loop', type=int, default=-1, help='for --play mode only: exit after LOOP slideshow repeat (default 0: endless loop)')
         parser.add_argument('--count', type=int, default=-1, help='for --play mode only: show only COUNT images (default 0: all the images)')
         parser.add_argument('--read-only', action='store_true', help='disable playlist saving/overwriting')
+        parser.add_argument('--exif-tagger', metavar='CMD', type=str, default=None, help='external command to edit the Exif UserComment tag (F3) instead of the internal dialog; overrides the PHOTO_REFRAME_EXIF_TAGGER environment variable')
         args = parser.parse_args()
         if sys.version_info[0] < 3:
             args.playlist = args.playlist.decode('utf-8')
@@ -500,6 +529,14 @@ class photoReframeApp(QMainWindow):
             self.caption_display = False
         if args.read_only:
             self.read_only = True
+        # Select the external UserComment tagger plugin, if any. The command
+        # line option takes precedence over the environment variable / module
+        # default (EXIF_TAGGER_COMMAND). If it stays None, the internal dialog
+        # is used.
+        if args.exif_tagger is not None:
+            self.exif_tagger_command = args.exif_tagger
+        else:
+            self.exif_tagger_command = EXIF_TAGGER_COMMAND
 
         # Build the lists (names, geometries) of images.
         self.readPlaylist()
@@ -982,11 +1019,16 @@ class photoReframeApp(QMainWindow):
             read_only_tip = ' (disabled)'
         else:
             read_only_tip = ''
+        # If an external UserComment plugin is in use, show its basename.
+        if self.exif_tagger_command is not None:
+            exif_tagger_tip = ' [plugin: %s]' % (os.path.basename(self.exif_tagger_command),)
+        else:
+            exif_tagger_tip = ''
         dlg = QMessageBox(self)
         dlg.setWindowTitle('%s Help' % (APP_TITLE,))
         msg = """F1 or ?\tShow this help
 F2\tShare With...
-F3\tEdit Exif UserComment tag%s
+F3\tEdit Exif UserComment tag%s%s
 F11 or F\tToggle fullscreen mode
 +\tZoom in
 -\tZoom out
@@ -1011,7 +1053,7 @@ End\tGo to the last image
 C\tToggle display of Exif UserComment
 P\tToggle autoplay
 S\tSave the playlist with updated gemetries%s
-Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip, read_only_tip)
+Esc or Q\tQuit program""" % (read_only_tip, exif_tagger_tip, read_only_tip, read_only_tip, read_only_tip)
         dlg.setText(msg)
         dlg.setIcon(QMessageBox.Information)
         dlg.setInformativeText('Version: %s\n%s' % (__version__, __copyright__))
@@ -1054,6 +1096,90 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip, read_o
                 self.showImageCaption()
             except Exception as e:
                 logging.error('Subprocess "%s" error: %s' % (EXIV2_COMMAND, str(e),))
+
+
+    def userCommentPlugin(self):
+        """ Launch the external plugin to edit the Exif UserComment tag.
+
+        Used instead of userCommentDialog() when self.exif_tagger_command
+        is set (see EXIF_TAGGER_COMMAND, the PHOTO_REFRAME_EXIF_TAGGER
+        environment variable and the --exif-tagger option).
+
+        The plugin is launched asynchronously with QProcess, so the Qt
+        event loop keeps running and the window keeps repainting while the
+        plugin window is on screen (a blocking subprocess call would freeze
+        the GUI and leave the window dirty). The plugin receives the image
+        filename as its only argument and must edit the tag by itself. Its
+        exit is intercepted by userCommentPluginFinished(), which honors
+        the "unchanged" protocol described at EXIF_TAGGER_COMMAND.
+        """
+        # Do not launch a second plugin while one is still running.
+        if self.exif_tagger_process is not None:
+            logging.warning('UserComment plugin is already running')
+            self.popup('Plugin already running')
+            return
+        filename = os.path.join(self.directory, self.current_image)
+        # Remember which image we are editing: on finish we refresh the
+        # caption only if that same image is still displayed.
+        self.exif_tagger_image = self.current_image
+        proc = QtCore.QProcess(self)
+        proc.setProgram(self.exif_tagger_command)
+        proc.setArguments([filename])
+        proc.finished.connect(self.userCommentPluginFinished)
+        proc.errorOccurred.connect(self.userCommentPluginError)
+        self.exif_tagger_process = proc
+        logging.info('Executing (async): %s %s' % (self.exif_tagger_command, filename))
+        proc.start()
+
+
+    def userCommentPluginFinished(self, exit_code, exit_status):
+        """ Called when the external plugin quits (the "intercept" hook).
+
+        Re-reads the Exif UserComment through the existing getExifTag()
+        decode path and redraws the caption, but only when the plugin
+        actually modified the file (did NOT print "unchanged") and the
+        same image is still displayed. Re-reading the tag instead of
+        reloading the image preserves the current framing.
+        """
+        proc = self.exif_tagger_process
+        launched_image = self.exif_tagger_image
+        # Reset state first, so F3 can be used again immediately.
+        self.exif_tagger_process = None
+        self.exif_tagger_image = None
+        if proc is None:
+            return
+        stdout = bytes(proc.readAllStandardOutput()).decode('utf-8', 'replace')
+        proc.deleteLater()
+        if exit_status != QtCore.QProcess.NormalExit or exit_code != 0:
+            logging.error('UserComment plugin exited abnormally (code %s)' % (exit_code,))
+            return
+        # "unchanged" protocol: the plugin left the file as it was.
+        if stdout.strip() == 'unchanged':
+            logging.info('UserComment plugin reported "unchanged"')
+            return
+        # Refresh only if the same image is still displayed (the user may
+        # have navigated, or autoplay advanced, while the plugin was open).
+        if self.current_image != launched_image:
+            logging.info('Displayed image changed; not refreshing caption')
+            return
+        filename = os.path.join(self.directory, launched_image)
+        self.getExifTag(filename)
+        self.showImageCaption()
+
+
+    def userCommentPluginError(self, error):
+        """ Handle a plugin that fails to start (e.g. command not found) """
+        if error == QtCore.QProcess.FailedToStart:
+            logging.error('Cannot start UserComment plugin "%s"' % (self.exif_tagger_command,))
+            if self.exif_tagger_process is not None:
+                self.exif_tagger_process.deleteLater()
+            self.exif_tagger_process = None
+            self.exif_tagger_image = None
+            self.popup('Cannot start plugin')
+        else:
+            # A crash is also reported by finished() with CrashExit; let
+            # that handler do the cleanup to avoid touching freed state.
+            logging.error('UserComment plugin error: %s' % (error,))
 
 
     def deleteCurrentImageFile(self):
@@ -1130,9 +1256,11 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip, read_o
             """ Show Share With dialog """
             self.shareDialog()
         elif event.key() == QtCore.Qt.Key_F3:
-            """ Show Edit UserComment dialog """
+            """ Edit UserComment: internal dialog or external plugin """
             if self.read_only:
                 self.popup('Exif editing is disabled')
+            elif self.exif_tagger_command is not None:
+                self.userCommentPlugin()
             else:
                 self.userCommentDialog()
         elif event.key() == QtCore.Qt.Key_F11 or event.key() == QtCore.Qt.Key_F:
@@ -1275,6 +1403,9 @@ Esc or Q\tQuit program""" % (read_only_tip, read_only_tip, read_only_tip, read_o
     def closeEvent(self, event):
         """ Close app: stop timer, close fullscreen, ask to save """
         self.closing_now = True
+        # Kill a still-running UserComment plugin for a clean exit.
+        if self.exif_tagger_process is not None:
+            self.exif_tagger_process.kill()
         if self.close_popup_timer.isActive():
             self.close_popup_timer.stop()
         if self.timer.isActive():
