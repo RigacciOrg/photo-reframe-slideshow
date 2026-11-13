@@ -9,12 +9,16 @@ libraries.
 It requires also the external command line tool **exiv2**, to
 eventually fix a wrong Exif Orientation tag in images.
 
+The Exif **UserComment** metadata of each image can be edited on
+the fly (press the **F3** key), either through a built-in dialog
+box or through an external plugin of your choice (see below).
+
 Usage:
 
 ```
 usage: photo-reframe [-h] [-f] [-r WxH] [-p] [--timer TIMER]
                      [--no-usercomment] [--shuffle] [--loop LOOP]
-                     [--count COUNT] [--read-only]
+                     [--count COUNT] [--read-only] [--exif-tagger CMD]
                      playlist
 
 Show images listed in playlist, which contains "filename|geometry" entries.
@@ -35,6 +39,9 @@ optional arguments:
   --count COUNT        for --play mode only: show only COUNT images (default
                        0: all the images)
   --read-only          disable playlist saving/overwriting
+  --exif-tagger CMD    external command to edit the Exif UserComment tag (F3)
+                       instead of the internal dialog; overrides the
+                       PHOTO_REFRAME_EXIF_TAGGER environment variable
 ```
 
 ## Slideshow Mode
@@ -171,3 +178,26 @@ program defined by the **SHARE_COMMAND** variable, passing to it
 the image filename and the recipient address as arguments. You 
 can create for example an external script to send the displayed 
 image as an email attachment.
+
+The **Edit Exif UserComment** function, invoked with the **F3** 
+key, lets you edit the **Exif.Photo.UserComment** tag of the 
+displayed image (the caption shown during the slideshow, which 
+you can toggle with the **C** key). By default it opens an 
+internal dialog box where you type the comment, which is then 
+written to the file through the external **exiv2** command.
+
+Alternatively, the editing can be delegated to an external 
+program (a _plugin_), enabled either with the **--exif-tagger 
+CMD** command line option or by setting the 
+**PHOTO_REFRAME_EXIF_TAGGER** environment variable (the command 
+line option takes precedence over the variable). The plugin 
+receives the image filename as its only argument and is 
+responsible for editing the tag by itself (for example by calling 
+**exiv2**). It is launched asynchronously, so the photo-reframe 
+window keeps repainting while the plugin window is open; when the 
+plugin quits, the caption is refreshed. If the plugin leaves the 
+file unchanged, it should print the string **unchanged** on its 
+standard output, so the program can skip reloading the tag.
+
+Note that the **--read-only** option also disables the F3 editing 
+function, regardless of the method in use.
